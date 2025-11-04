@@ -2423,11 +2423,26 @@ function renderStandingsGraph(sortedUsers) {
     const graphContainer = document.getElementById('standingsGraph');
     if (!graphContainer) return;
     
-    // Use calendar as single source of truth - includes all races (past, present, future)
-    const calendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
+    // Use calendar as single source of truth - but only show races up to the last COMPLETED race
+    const allCalendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
+    
+    // Find the last completed race - only show races up to that point
+    const completedRaces = allCalendarRaces.filter(r => r.status === 'completed');
+    const lastCompletedRace = completedRaces.length > 0 
+        ? completedRaces.sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date))[0]
+        : null;
+    
+    // Only include races up to and including the last completed race
+    const calendarRaces = lastCompletedRace 
+        ? allCalendarRaces.filter(r => {
+            const raceDate = new Date(r.date || r.deadlineDate);
+            const lastDate = new Date(lastCompletedRace.date || lastCompletedRace.deadlineDate);
+            return raceDate <= lastDate;
+        })
+        : allCalendarRaces.filter(r => r.status === 'completed');
     
     if (calendarRaces.length === 0) {
-        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No races in calendar yet. Add races to see standings graph.</p>';
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No completed races yet. Complete a race to see standings graph.</p>';
         return;
     }
     
@@ -2443,8 +2458,19 @@ function renderStandingsGraph(sortedUsers) {
     if (!canvas) return;
     
     // Calculate cumulative points per race for each player
+    // Only show races that have been completed (have standings data)
+    const racesWithResults = calendarRaces.filter(race => {
+        const raceIdStr = String(race.id);
+        return state.standings[raceIdStr] && Object.keys(state.standings[raceIdStr]).length > 0;
+    });
+    
+    if (racesWithResults.length === 0) {
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No race results published yet. Publish race results to see standings graph.</p>';
+        return;
+    }
+    
     const chartData = {
-        labels: calendarRaces.map(race => race.name),
+        labels: racesWithResults.map(race => race.name),
         datasets: []
     };
     
@@ -2470,8 +2496,9 @@ function renderStandingsGraph(sortedUsers) {
         let cumulativeTotal = 0;
         
         // Calculate cumulative points for each race in chronological order
+        // ONLY include races that have been completed (have standings data)
         // This MUST match the table calculation: sum of state.standings[raceIdStr][userId].total for all races
-        calendarRaces.forEach(race => {
+        racesWithResults.forEach(race => {
             const raceIdStr = String(race.id);
             const raceStanding = state.standings[raceIdStr];
             
@@ -2482,7 +2509,7 @@ function renderStandingsGraph(sortedUsers) {
                 cumulativeTotal += pointsThisRace;
             }
             
-            // For future races without results, use previous cumulative total (flat line)
+            // Push the cumulative total at this race (everyone starts at 0, then gains points)
             data.push(cumulativeTotal);
         });
         
@@ -2524,7 +2551,14 @@ function renderStandingsGraph(sortedUsers) {
     const textSecondary = getComputedColor('--text-secondary');
     const borderColor = getComputedColor('--border-color');
     
-    // Create Chart.js line chart
+    // Register zoom plugin (if available)
+    if (typeof ChartZoom !== 'undefined') {
+        Chart.register(ChartZoom);
+    } else if (typeof window.ChartZoom !== 'undefined') {
+        Chart.register(window.ChartZoom);
+    }
+    
+    // Create Chart.js line chart with zoom/pan capabilities
     const ctx = canvas.getContext('2d');
     window.standingsChart = new Chart(ctx, {
         type: 'line',
@@ -2536,12 +2570,23 @@ function renderStandingsGraph(sortedUsers) {
                 mode: 'index',
                 intersect: false
             },
+            // Add click handler for race labels to zoom to that section
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const datasetIndex = elements[0].datasetIndex;
+                    const index = elements[0].index;
+                    // Zoom to show 3 races around the clicked one
+                    const start = Math.max(0, index - 1);
+                    const end = Math.min(racesWithResults.length - 1, index + 1);
+                    window.standingsChart.zoomScale('x', { min: start, max: end });
+                }
+            },
             plugins: {
                 title: {
                     display: true,
                     text: 'Cumulative Points Over Season',
                     font: {
-                        size: 18,
+                        size: window.innerWidth < 768 ? 14 : 18,
                         weight: '600'
                     },
                     color: textPrimary,
@@ -2556,9 +2601,9 @@ function renderStandingsGraph(sortedUsers) {
                     align: 'center',
                     labels: {
                         usePointStyle: true,
-                        padding: 15,
+                        padding: window.innerWidth < 768 ? 10 : 15,
                         font: {
-                            size: 12
+                            size: window.innerWidth < 768 ? 10 : 12
                         },
                         color: textPrimary,
                         generateLabels: function(chart) {
@@ -2595,6 +2640,30 @@ function renderStandingsGraph(sortedUsers) {
                             ];
                         }
                     }
+                },
+                zoom: {
+                    zoom: {
+                        wheel: {
+                            enabled: true,
+                            speed: 0.1
+                        },
+                        pinch: {
+                            enabled: true
+                        },
+                        mode: 'xy',
+                        limits: {
+                            x: { min: 0, max: racesWithResults.length - 1 },
+                            y: { min: 0 }
+                        }
+                    },
+                    pan: {
+                        enabled: true,
+                        mode: 'xy',
+                        limits: {
+                            x: { min: 0, max: racesWithResults.length - 1 },
+                            y: { min: 0 }
+                        }
+                    }
                 }
             },
             scales: {
@@ -2618,12 +2687,13 @@ function renderStandingsGraph(sortedUsers) {
                         maxRotation: 45,
                         minRotation: 45,
                         font: {
-                            size: 10
+                            size: window.innerWidth < 768 ? 8 : 10
                         },
                         callback: function(value, index) {
                             const label = this.getLabelForValue(value);
-                            // Truncate long race names for readability
-                            return label.length > 15 ? label.substring(0, 12) + '...' : label;
+                            // Truncate long race names for readability on mobile
+                            const maxLength = window.innerWidth < 768 ? 10 : 15;
+                            return label.length > maxLength ? label.substring(0, maxLength - 3) + '...' : label;
                         }
                     }
                 },
@@ -2647,7 +2717,15 @@ function renderStandingsGraph(sortedUsers) {
                         color: textSecondary,
                         precision: 0,
                         font: {
-                            size: 11
+                            size: window.innerWidth < 768 ? 9 : 11
+                        },
+                        // Auto-scale for large point values (up to 1248+ points)
+                        stepSize: function(context) {
+                            const maxValue = context.chart.scales.y.max;
+                            if (maxValue > 500) return 100;
+                            if (maxValue > 200) return 50;
+                            if (maxValue > 100) return 25;
+                            return 10;
                         }
                     }
                 }
@@ -2659,10 +2737,29 @@ function renderStandingsGraph(sortedUsers) {
         }
     });
     
-    // Set canvas height for responsive design
-    canvas.style.height = '400px';
-    canvas.style.maxHeight = '80vh';
-    canvas.style.minHeight = '300px';
+    // Set canvas height for responsive design - larger for better visibility
+    const isMobile = window.innerWidth < 768;
+    canvas.style.height = isMobile ? '350px' : '500px';
+    canvas.style.maxHeight = isMobile ? '60vh' : '80vh';
+    canvas.style.minHeight = isMobile ? '300px' : '400px';
+    
+    // Add zoom controls for easy navigation
+    const zoomControls = document.createElement('div');
+    zoomControls.className = 'zoom-controls';
+    zoomControls.style.cssText = 'display: flex; gap: 10px; margin-top: 10px; justify-content: center; flex-wrap: wrap;';
+    zoomControls.innerHTML = `
+        <button class="btn-secondary" onclick="if(window.standingsChart){window.standingsChart.zoom(1.2);}" style="padding: 5px 15px; font-size: 12px;">🔍 Zoom In</button>
+        <button class="btn-secondary" onclick="if(window.standingsChart){window.standingsChart.zoom(0.8);}" style="padding: 5px 15px; font-size: 12px;">🔍 Zoom Out</button>
+        <button class="btn-secondary" onclick="if(window.standingsChart){window.standingsChart.resetZoom();}" style="padding: 5px 15px; font-size: 12px;">Reset View</button>
+        <button class="btn-secondary" onclick="if(window.standingsChart){window.standingsChart.pan(20, 0, 'x');}" style="padding: 5px 15px; font-size: 12px;">← Pan Left</button>
+        <button class="btn-secondary" onclick="if(window.standingsChart){window.standingsChart.pan(-20, 0, 'x');}" style="padding: 5px 15px; font-size: 12px;">Pan Right →</button>
+    `;
+    
+    // Remove existing zoom controls if any
+    const existingControls = graphContainer.querySelector('.zoom-controls');
+    if (existingControls) existingControls.remove();
+    
+    graphContainer.appendChild(zoomControls);
 }
 
 // CSV Export

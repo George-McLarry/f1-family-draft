@@ -863,24 +863,55 @@ tr:hover {
     border-radius: 8px;
     min-height: 400px;
     position: relative;
+    overflow-x: auto;
+    overflow-y: visible;
 }
 
 #standingsChartCanvas {
     width: 100% !important;
-    height: 400px !important;
+    height: 500px !important;
     max-height: 80vh;
-    min-height: 300px;
+    min-height: 400px;
+    touch-action: pan-x pan-y pinch-zoom;
+}
+
+.zoom-controls {
+    margin-top: 15px;
+    padding: 10px;
+    background: var(--bg-primary);
+    border-radius: 6px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.zoom-controls button {
+    font-size: 12px;
+    padding: 6px 12px;
+    white-space: nowrap;
 }
 
 @media (max-width: 768px) {
     .standings-graph {
         padding: 10px;
-        min-height: 300px;
+        min-height: 350px;
     }
     
     #standingsChartCanvas {
-        height: 300px !important;
-        min-height: 250px;
+        height: 350px !important;
+        min-height: 300px;
+        touch-action: pan-x pan-y pinch-zoom;
+    }
+    
+    .zoom-controls {
+        padding: 8px;
+        gap: 8px;
+    }
+    
+    .zoom-controls button {
+        font-size: 11px;
+        padding: 5px 10px;
     }
 }
 
