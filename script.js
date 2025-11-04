@@ -2423,28 +2423,19 @@ function renderStandingsGraph(sortedUsers) {
     const graphContainer = document.getElementById('standingsGraph');
     if (!graphContainer) return;
     
-    // Use calendar as single source of truth - but only show races up to the last COMPLETED race
+    // Use calendar as single source of truth - show ALL races on timeline for context
     const allCalendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
     
-    // Find the last completed race - only show races up to that point
+    if (allCalendarRaces.length === 0) {
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No races in calendar yet. Add races to see standings graph.</p>';
+        return;
+    }
+    
+    // Find the last completed race - lines will stop here
     const completedRaces = allCalendarRaces.filter(r => r.status === 'completed');
     const lastCompletedRace = completedRaces.length > 0 
         ? completedRaces.sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date))[0]
         : null;
-    
-    // Only include races up to and including the last completed race
-    const calendarRaces = lastCompletedRace 
-        ? allCalendarRaces.filter(r => {
-            const raceDate = new Date(r.date || r.deadlineDate);
-            const lastDate = new Date(lastCompletedRace.date || lastCompletedRace.deadlineDate);
-            return raceDate <= lastDate;
-        })
-        : allCalendarRaces.filter(r => r.status === 'completed');
-    
-    if (calendarRaces.length === 0) {
-        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No completed races yet. Complete a race to see standings graph.</p>';
-        return;
-    }
     
     // Destroy existing chart if it exists
     if (window.standingsChart) {
@@ -2457,22 +2448,17 @@ function renderStandingsGraph(sortedUsers) {
     const canvas = document.getElementById('standingsChartCanvas');
     if (!canvas) return;
     
-    // Calculate cumulative points per race for each player
-    // Only show races that have been completed (have standings data)
-    const racesWithResults = calendarRaces.filter(race => {
-        const raceIdStr = String(race.id);
-        return state.standings[raceIdStr] && Object.keys(state.standings[raceIdStr]).length > 0;
-    });
-    
-    if (racesWithResults.length === 0) {
-        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No race results published yet. Publish race results to see standings graph.</p>';
-        return;
-    }
-    
+    // Timeline shows ALL races from calendar (for context)
+    // But lines only extend to the last completed race
     const chartData = {
-        labels: racesWithResults.map(race => race.name),
+        labels: allCalendarRaces.map(race => race.name),
         datasets: []
     };
+    
+    // Find the index of the last completed race in the timeline
+    const lastCompletedIndex = lastCompletedRace 
+        ? allCalendarRaces.findIndex(r => String(r.id) === String(lastCompletedRace.id))
+        : -1;
     
     const colors = [
         'rgb(225, 6, 0)',      // Red Bull red
@@ -2496,31 +2482,34 @@ function renderStandingsGraph(sortedUsers) {
         let cumulativeTotal = 0;
         
         // Calculate cumulative points for each race in chronological order
-        // ONLY include races that have been completed (have standings data)
-        // This MUST match the table calculation: sum of state.standings[raceIdStr][userId].total for all races
-        racesWithResults.forEach(race => {
+        // Show ALL races on timeline, but lines only extend to last completed race
+        allCalendarRaces.forEach((race, index) => {
             const raceIdStr = String(race.id);
             const raceStanding = state.standings[raceIdStr];
             
-            // Add points earned in this race (if results exist)
+            // Add points earned in this race (if results exist and race is completed)
             // This matches exactly how updateStandings() sums: userTotals[userId].total += points.total
-            if (raceStanding && userId && raceStanding[userId]) {
+            if (raceStanding && userId && raceStanding[userId] && index <= lastCompletedIndex) {
                 const pointsThisRace = raceStanding[userId].total || 0;
                 cumulativeTotal += pointsThisRace;
             }
             
-            // Push the cumulative total at this race (everyone starts at 0, then gains points)
+            // For races after the last completed one, keep the same cumulative total (flat line)
+            // This way the timeline shows all races, but lines stop at the current progress
             data.push(cumulativeTotal);
         });
         
         // Verify: The final cumulative total should match the table total
         // This ensures graph and table show the same final values
         const tableTotal = user.total;
-        const graphFinalTotal = data.length > 0 ? data[data.length - 1] : 0;
         
-        // Only include races that have standings data (for completed races)
-        // This ensures graph matches table exactly
-        const lastDataPoint = data.length > 0 ? data[data.length - 1] : 0;
+        // Make points after last completed race smaller/invisible to show where progress stops
+        const pointRadii = data.map((value, index) => {
+            return index <= lastCompletedIndex ? 4 : 2; // Smaller points for future races
+        });
+        const pointHoverRadii = data.map((value, index) => {
+            return index <= lastCompletedIndex ? 6 : 0; // No hover for future races
+        });
         
         chartData.datasets.push({
             label: `${user.avatar || ''} ${username} (${tableTotal} pts)`,
@@ -2530,14 +2519,18 @@ function renderStandingsGraph(sortedUsers) {
             borderWidth: 2.5,
             fill: false,
             tension: 0.4, // Smooth curves
-            pointRadius: 4,
-            pointHoverRadius: 6,
+            pointRadius: pointRadii,
+            pointHoverRadius: pointHoverRadii,
             pointBackgroundColor: colors[userIdx % colors.length],
             pointBorderColor: '#fff',
             pointBorderWidth: 2,
             pointHoverBackgroundColor: colors[userIdx % colors.length],
             pointHoverBorderColor: '#fff',
-            pointHoverBorderWidth: 3
+            pointHoverBorderWidth: 3,
+            // Show where progress stops - make line after last completed race more subtle
+            borderDash: data.map((value, index) => {
+                return index > lastCompletedIndex ? [5, 5] : [];
+            })
         });
     });
     
@@ -2577,7 +2570,7 @@ function renderStandingsGraph(sortedUsers) {
                     const index = elements[0].index;
                     // Zoom to show 3 races around the clicked one
                     const start = Math.max(0, index - 1);
-                    const end = Math.min(racesWithResults.length - 1, index + 1);
+                    const end = Math.min(allCalendarRaces.length - 1, index + 1);
                     window.standingsChart.zoomScale('x', { min: start, max: end });
                 }
             },
@@ -2652,7 +2645,7 @@ function renderStandingsGraph(sortedUsers) {
                         },
                         mode: 'xy',
                         limits: {
-                            x: { min: 0, max: racesWithResults.length - 1 },
+                            x: { min: 0, max: allCalendarRaces.length - 1 },
                             y: { min: 0 }
                         }
                     },
@@ -2660,7 +2653,7 @@ function renderStandingsGraph(sortedUsers) {
                         enabled: true,
                         mode: 'xy',
                         limits: {
-                            x: { min: 0, max: racesWithResults.length - 1 },
+                            x: { min: 0, max: allCalendarRaces.length - 1 },
                             y: { min: 0 }
                         }
                     }
