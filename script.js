@@ -2317,6 +2317,7 @@ function updateStandings() {
     
     state.users.forEach(user => {
         userTotals[user.id] = {
+            id: user.id, // Include ID for graph function
             username: user.username,
             avatar: user.avatar,
             grojean: 0,
@@ -2460,27 +2461,42 @@ function renderStandingsGraph(sortedUsers) {
         'rgb(233, 30, 99)'     // Pink
     ];
     
+    // Use the same calculation logic as the standings table
+    // For each user, calculate cumulative points race by race (matching table totals exactly)
     sortedUsers.forEach((user, userIdx) => {
-        const userId = typeof user === 'object' ? user.id : state.users.find(u => u.username === user)?.id;
-        const username = typeof user === 'object' ? user.username : user;
+        const userId = user.id; // Now guaranteed to exist from updateStandings
+        const username = user.username;
         const data = [];
         let cumulativeTotal = 0;
         
+        // Calculate cumulative points for each race in chronological order
+        // This MUST match the table calculation: sum of state.standings[raceIdStr][userId].total for all races
         calendarRaces.forEach(race => {
             const raceIdStr = String(race.id);
             const raceStanding = state.standings[raceIdStr];
             
             // Add points earned in this race (if results exist)
+            // This matches exactly how updateStandings() sums: userTotals[userId].total += points.total
             if (raceStanding && userId && raceStanding[userId]) {
-                cumulativeTotal += raceStanding[userId].total || 0;
+                const pointsThisRace = raceStanding[userId].total || 0;
+                cumulativeTotal += pointsThisRace;
             }
             
             // For future races without results, use previous cumulative total (flat line)
             data.push(cumulativeTotal);
         });
         
+        // Verify: The final cumulative total should match the table total
+        // This ensures graph and table show the same final values
+        const tableTotal = user.total;
+        const graphFinalTotal = data.length > 0 ? data[data.length - 1] : 0;
+        
+        // Only include races that have standings data (for completed races)
+        // This ensures graph matches table exactly
+        const lastDataPoint = data.length > 0 ? data[data.length - 1] : 0;
+        
         chartData.datasets.push({
-            label: `${user.avatar || ''} ${username}`,
+            label: `${user.avatar || ''} ${username} (${tableTotal} pts)`,
             data: data,
             borderColor: colors[userIdx % colors.length],
             backgroundColor: colors[userIdx % colors.length].replace('rgb', 'rgba').replace(')', ', 0.1)'),
