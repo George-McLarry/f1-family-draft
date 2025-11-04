@@ -14,10 +14,18 @@ function generatePicksForRace(draftType, raceId) {
     
     // Use turn order (sorted by turnOrder array) - ensures fair rotation
     const turnOrder = state.turnOrder || state.users.map(u => u.id);
+    // Normalize turn order and user IDs to strings for consistent comparison
+    const turnOrderStr = turnOrder.map(id => String(id));
     // Base order (ascending by turn order position)
     const baseOrder = submittedUsers.sort((a, b) => {
-        const aIndex = turnOrder.indexOf(a.id);
-        const bIndex = turnOrder.indexOf(b.id);
+        const aIdStr = String(a.id);
+        const bIdStr = String(b.id);
+        const aIndex = turnOrderStr.indexOf(aIdStr);
+        const bIndex = turnOrderStr.indexOf(bIdStr);
+        // If not found in turnOrder, put at end (shouldn't happen, but handle gracefully)
+        if (aIndex === -1 && bIndex === -1) return 0;
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
         return aIndex - bIndex;
     });
     // For Chilton drafts, reverse user turn order so last pick in Grojean gets first in Chilton
@@ -35,8 +43,10 @@ function generatePicksForRace(draftType, raceId) {
     // Works with any number of players (up to 20 players, 20 drivers)
     order.forEach((user, index) => {
         // Rankings are always stored under 'grojean' - players submit one ranking list
-        const rankings = (state.userRankings && state.userRankings.grojean && state.userRankings.grojean[user.id] && state.userRankings.grojean[user.id][raceIdStr]) 
-            ? state.userRankings.grojean[user.id][raceIdStr] 
+        // Ensure user.id is properly compared (handle both string and number IDs)
+        const userId = user.id;
+        const rankings = (state.userRankings && state.userRankings.grojean && state.userRankings.grojean[userId] && state.userRankings.grojean[userId][raceIdStr]) 
+            ? state.userRankings.grojean[userId][raceIdStr] 
             : [];
         
         // For Chilton (Last Place), reverse rankings so worst drivers are checked first
@@ -46,9 +56,16 @@ function generatePicksForRace(draftType, raceId) {
         // Find first available driver from player's rankings
         let assigned = false;
         for (const driverId of list) {
-            if (!usedDrivers.has(driverId)) {
-                picks.push({ userId: user.id, driverId, round: 1, pickNumber: picks.length + 1 });
-                usedDrivers.add(driverId);
+            // Normalize driverId to number for consistent comparison
+            const driverIdNum = typeof driverId === 'string' ? parseInt(driverId, 10) : driverId;
+            // Check if driver is already used (handle both number and string formats)
+            const isUsed = usedDrivers.has(driverIdNum) || usedDrivers.has(String(driverIdNum)) || usedDrivers.has(driverId);
+            
+            if (!isUsed && !isNaN(driverIdNum)) {
+                picks.push({ userId: userId, driverId: driverIdNum, round: 1, pickNumber: picks.length + 1 });
+                // Add driver in both formats to prevent duplicates
+                usedDrivers.add(driverIdNum);
+                usedDrivers.add(String(driverIdNum));
                 assigned = true;
                 break;
             }
@@ -56,7 +73,7 @@ function generatePicksForRace(draftType, raceId) {
         
         // If no driver was available (shouldn't happen with 20 drivers and <=20 players), log warning
         if (!assigned) {
-            console.warn(`No available driver found for user ${user.id} in ${draftType} draft for race ${raceIdStr}`);
+            console.warn(`No available driver found for user ${userId} in ${draftType} draft for race ${raceIdStr}. Rankings length: ${rankings.length}, Used drivers: ${usedDrivers.size}`);
         }
     });
     
@@ -1710,7 +1727,13 @@ function renderTop5PicksCurrent(currentRace) {
     const forUser = state.bonusPicks.top5[user.id] || {};
     // Try both string and number formats for raceId (defensive lookup)
     const raceIdStr = String(currentRace.id);
-    const currentTop5 = forUser[raceIdStr] || forUser[currentRace.id] || [];
+    let currentTop5 = forUser[raceIdStr] || forUser[currentRace.id] || [];
+    
+    // Auto-fill from last race if current race has no picks (like Pole pick does)
+    if (!currentTop5 || currentTop5.length === 0) {
+        const last = Object.entries(forUser).sort((a,b)=>parseInt(b[0])-parseInt(a[0]))[0];
+        if (last) currentTop5 = [...last[1]]; // Copy array to avoid reference issues
+    }
     
     const container = document.createElement('div');
     container.style.display = 'grid';
@@ -4154,15 +4177,23 @@ function showMyDriversForRace() {
     if (!myDriversDisplay || !myDriversContent) return;
     
     // Get Grojean pick - ensure fresh calculation by regenerating picks
-    // Clear any cached results and force recalculation
+    // Force recalculation by calling function directly (no caching)
     const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
-    const myGrojeanPick = grojeanPicks.find(p => String(p.userId) === String(state.currentUser));
+    // Ensure we find the correct user by comparing both string and original format
+    const currentUserIdStr = String(state.currentUser);
+    const myGrojeanPick = grojeanPicks.find(p => {
+        const pickUserIdStr = String(p.userId);
+        return pickUserIdStr === currentUserIdStr;
+    });
     const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
     
     // Get Chilton pick (Last Place - automatically calculated from draft, not manually picked)
     // Ensure fresh calculation
     const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
-    const myChiltonPick = chiltonPicks.find(p => String(p.userId) === String(state.currentUser));
+    const myChiltonPick = chiltonPicks.find(p => {
+        const pickUserIdStr = String(p.userId);
+        return pickUserIdStr === currentUserIdStr;
+    });
     const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
     
     // Get Top 5 bonus picks
