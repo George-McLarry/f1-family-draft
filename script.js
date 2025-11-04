@@ -598,6 +598,35 @@ function setupEventListeners() {
     if (publishRaceResultsBtn) {
         publishRaceResultsBtn.addEventListener('click', saveRaceResults);
     }
+    
+    // Spoiler alert buttons
+    const showRaceResultsBtn = document.getElementById('showRaceResultsBtn');
+    if (showRaceResultsBtn) {
+        showRaceResultsBtn.addEventListener('click', () => {
+            const spoiler = document.getElementById('raceResultsSpoiler');
+            const display = document.getElementById('raceResultsDisplay');
+            const raceId = spoiler ? spoiler.dataset.raceId : null;
+            
+            if (raceId && display) {
+                const race = state.races.find(r => String(r.id) === String(raceId));
+                if (race) {
+                    displayRaceResultsForPlayers(race);
+                    if (spoiler) spoiler.style.display = 'none';
+                    display.style.display = 'block';
+                }
+            }
+        });
+    }
+    
+    const hideRaceResultsBtn = document.getElementById('hideRaceResultsBtn');
+    if (hideRaceResultsBtn) {
+        hideRaceResultsBtn.addEventListener('click', () => {
+            const spoiler = document.getElementById('raceResultsSpoiler');
+            const display = document.getElementById('raceResultsDisplay');
+            if (spoiler) spoiler.style.display = 'block';
+            if (display) display.style.display = 'none';
+        });
+    }
     // loadRaceBtn and loadDemoBtn removed - no longer needed
     
     // Standings
@@ -1976,8 +2005,10 @@ function saveRaceResults() {
         }
     }
 
-    // Calculate or update race
-    const existingRaceIndex = state.races.findIndex(r => r.name === currentRace.name);
+    // Calculate or update race - use race calendar ID to prevent duplicates
+    const raceId = String(currentRace.id); // Use calendar race ID as string for consistency
+    const existingRaceIndex = state.races.findIndex(r => String(r.id) === raceId);
+    
     const raceData = {
         name: currentRace.name,
         date: currentRace.date,
@@ -1985,12 +2016,14 @@ function saveRaceResults() {
         statuses: statuses,
         times: times,
         pole: pole,
-        id: existingRaceIndex >= 0 ? state.races[existingRaceIndex].id : Date.now()
+        id: raceId // Always use the calendar race ID
     };
 
     if (existingRaceIndex >= 0) {
+        // Update existing race
         state.races[existingRaceIndex] = raceData;
     } else {
+        // Only add if it doesn't exist
         state.races.push(raceData);
     }
 
@@ -2052,9 +2085,11 @@ function calculateRaceScores(race) {
         
         // Grojean Draft Points (only if user submitted draft for this race)
         let grojeanPoints = 0;
-        const draftSubmitted = state.submissions && state.submissions.draft && state.submissions.draft[race.id] && state.submissions.draft[race.id][user.id];
+        const raceIdStr = String(race.id);
+        const draftSubmitted = state.submissions && state.submissions.draft && state.submissions.draft[raceIdStr] && state.submissions.draft[raceIdStr][user.id];
+        
         if (draftSubmitted) {
-            const picks = generatePicksForRace('grojean', String(race.id));
+            const picks = generatePicksForRace('grojean', raceIdStr);
             const userPicks = picks.filter(p => p.userId === user.id);
             userPicks.forEach(pick => {
                 const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
@@ -2074,7 +2109,7 @@ function calculateRaceScores(race) {
         // Chilton Draft Points
         let chiltonPoints = 0;
         if (draftSubmitted) {
-            const picks = generatePicksForRace('chilton', String(race.id));
+            const picks = generatePicksForRace('chilton', raceIdStr);
             const userPicks = picks.filter(p => p.userId === user.id);
             userPicks.forEach(pick => {
                 const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
@@ -2093,8 +2128,8 @@ function calculateRaceScores(race) {
 
         // Pole Bonus - 2 points if correct, 0 if wrong
         let poleBonus = 0;
-        const bonusesSubmitted = state.submissions && state.submissions.bonus && state.submissions.bonus[race.id] && state.submissions.bonus[race.id][user.id];
-        const polePick = bonusesSubmitted && state.bonusPicks.pole[user.id] && state.bonusPicks.pole[user.id][race.id];
+        const bonusesSubmitted = state.submissions && state.submissions.bonus && state.submissions.bonus[raceIdStr] && state.submissions.bonus[raceIdStr][user.id];
+        const polePick = bonusesSubmitted && state.bonusPicks.pole && state.bonusPicks.pole[user.id] && state.bonusPicks.pole[user.id][raceIdStr];
         if (polePick && race.pole === polePick) {
             poleBonus = 2;
         }
@@ -2102,7 +2137,7 @@ function calculateRaceScores(race) {
         // Top 5 Bonus - New scoring system
         // 1 point per driver in top 5 + 1 bonus point for exact position match
         let top5Bonus = 0;
-        const top5Picks = bonusesSubmitted && state.bonusPicks.top5[user.id] && state.bonusPicks.top5[user.id][race.id] ? state.bonusPicks.top5[user.id][race.id] : [];
+        const top5Picks = bonusesSubmitted && state.bonusPicks.top5 && state.bonusPicks.top5[user.id] && state.bonusPicks.top5[user.id][raceIdStr] ? state.bonusPicks.top5[user.id][raceIdStr] : [];
         const top5Results = getTop5Results(race.results);
         
         // For each predicted driver in user's top 5
@@ -2206,25 +2241,37 @@ function updateStandings() {
     });
 
     // Sum up points from all races
-    Object.values(state.standings).forEach(raceStandings => {
-        if (filter !== 'all') {
-            const raceId = parseInt(filter);
-            const currentRace = state.races.find(r => r.id === raceId);
-            if (!currentRace || !state.standings[currentRace.id]) return;
-            raceStandings = state.standings[currentRace.id];
-        }
-
-        Object.keys(raceStandings).forEach(userId => {
-            if (userTotals[userId]) {
-                const points = raceStandings[userId];
-                userTotals[userId].grojean += points.grojean || 0;
-                userTotals[userId].chilton += points.chilton || 0;
-                userTotals[userId].poleBonus += points.poleBonus || 0;
-                userTotals[userId].top5Bonus += points.top5Bonus || 0;
-                userTotals[userId].total += points.total || 0;
-            }
+    if (filter === 'all') {
+        // Sum all races
+        Object.entries(state.standings).forEach(([raceIdStr, raceStandings]) => {
+            Object.keys(raceStandings).forEach(userId => {
+                if (userTotals[userId]) {
+                    const points = raceStandings[userId];
+                    userTotals[userId].grojean += points.grojean || 0;
+                    userTotals[userId].chilton += points.chilton || 0;
+                    userTotals[userId].poleBonus += points.poleBonus || 0;
+                    userTotals[userId].top5Bonus += points.top5Bonus || 0;
+                    userTotals[userId].total += points.total || 0;
+                }
+            });
         });
-    });
+    } else {
+        // Filter by specific race
+        const raceIdStr = String(filter);
+        const raceStandings = state.standings[raceIdStr];
+        if (raceStandings) {
+            Object.keys(raceStandings).forEach(userId => {
+                if (userTotals[userId]) {
+                    const points = raceStandings[userId];
+                    userTotals[userId].grojean = points.grojean || 0;
+                    userTotals[userId].chilton = points.chilton || 0;
+                    userTotals[userId].poleBonus = points.poleBonus || 0;
+                    userTotals[userId].top5Bonus = points.top5Bonus || 0;
+                    userTotals[userId].total = points.total || 0;
+                }
+            });
+        }
+    }
 
     // Sort by total
     const sortedUsers = Object.values(userTotals).sort((a, b) => {
@@ -2297,33 +2344,66 @@ function renderStandingsGraph(sortedUsers) {
         let cumulativeTotal = 0;
         
         raceOrder.forEach(race => {
-            const raceStanding = state.standings[race.id];
-            if (raceStanding && raceStanding[Object.keys(raceStanding).find(id => {
-                const u = state.users.find(us => us.id == id);
-                return u && u.username === user.username;
-            })]) {
-                const userId = state.users.find(u => u.username === user.username)?.id;
-                cumulativeTotal += raceStanding[userId]?.total || 0;
+            const raceIdStr = String(race.id);
+            const raceStanding = state.standings[raceIdStr];
+            const userId = state.users.find(u => u.username === user.username)?.id;
+            
+            if (raceStanding && userId && raceStanding[userId]) {
+                cumulativeTotal += raceStanding[userId].total || 0;
             }
             userSeries[user.username].push(cumulativeTotal);
         });
     });
     
-    // Simple SVG graph
+    // Enhanced SVG graph with grid lines and zoom
     const maxPoints = Math.max(...Object.values(userSeries).flat(), 1);
     const colors = ['#e10600', '#1e41ff', '#00a859', '#ff9800', '#9c27b0', '#00bcd4', '#ff5722', '#795548', '#607d8b', '#e91e63'];
-    let colorIndex = 0;
     
-    let svg = `<svg viewBox="0 0 800 400" style="width: 100%; height: 400px; background: var(--bg-primary); border-radius: 8px;">
-        <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="var(--text-primary)">Cumulative Points Over Season</text>
-        <line x1="50" y1="350" x2="750" y2="350" stroke="var(--border-color)" stroke-width="2"/>
+    // Zoom level (1 = normal, 2 = zoomed in, 0.5 = zoomed out)
+    const zoomLevel = window.graphZoomLevel || 1;
+    const viewBoxWidth = 800 * zoomLevel;
+    const viewBoxHeight = 400 * zoomLevel;
+    
+    let svg = `<div style="position: relative; margin-bottom: 10px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+            <button id="zoomInBtn" class="btn-secondary" style="padding: 5px 15px;">🔍 Zoom In</button>
+            <button id="zoomOutBtn" class="btn-secondary" style="padding: 5px 15px;">🔍 Zoom Out</button>
+            <button id="zoomResetBtn" class="btn-secondary" style="padding: 5px 15px;">Reset</button>
+        </div>
+        <svg id="standingsGraphSVG" viewBox="0 0 ${viewBoxWidth} ${viewBoxHeight}" style="width: 100%; height: ${400 * zoomLevel}px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
+        <text x="${viewBoxWidth/2}" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="var(--text-primary)">Cumulative Points Over Season</text>
+        
+        <!-- Grid lines (horizontal for points) -->
+        <defs>
+            <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="var(--border-color)" stroke-width="0.5" opacity="0.3"/>
+            </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+        
+        <!-- Y-axis with point labels -->
+        <line x1="50" y1="350" x2="${viewBoxWidth - 50}" y2="350" stroke="var(--border-color)" stroke-width="2"/>
         <line x1="50" y1="50" x2="50" y2="350" stroke="var(--border-color)" stroke-width="2"/>
+        
+        <!-- Horizontal grid lines for points -->
+        ${Array.from({length: 11}, (_, i) => {
+            const y = 350 - (i * 30);
+            const points = Math.round((i / 10) * maxPoints);
+            return `<line x1="50" y1="${y}" x2="${viewBoxWidth - 50}" y2="${y}" stroke="var(--border-color)" stroke-width="0.5" opacity="0.5" stroke-dasharray="2,2"/>
+                    <text x="45" y="${y + 4}" text-anchor="end" font-size="10" fill="var(--text-secondary)">${points}</text>`;
+        }).join('')}
+        
+        <!-- Vertical grid lines for races -->
+        ${raceOrder.map((race, idx) => {
+            const x = 50 + (idx * ((viewBoxWidth - 100) / (raceOrder.length - 1 || 1)));
+            return `<line x1="${x}" y1="50" x2="${x}" y2="350" stroke="var(--border-color)" stroke-width="0.5" opacity="0.5" stroke-dasharray="2,2"/>`;
+        }).join('')}
     `;
     
     // Race labels on X-axis
     raceOrder.forEach((race, idx) => {
-        const x = 50 + (idx * (700 / (raceOrder.length - 1 || 1)));
-        svg += `<text x="${x}" y="370" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${race.name}</text>`;
+        const x = 50 + (idx * ((viewBoxWidth - 100) / (raceOrder.length - 1 || 1)));
+        svg += `<text x="${x}" y="${viewBoxHeight - 20}" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${race.name.length > 10 ? race.name.substring(0, 10) + '...' : race.name}</text>`;
     });
     
     // Draw lines for each user
@@ -2331,18 +2411,18 @@ function renderStandingsGraph(sortedUsers) {
         const series = userSeries[username];
         const color = colors[userIdx % colors.length];
         const points = series.map((point, idx) => {
-            const x = 50 + (idx * (700 / (series.length - 1 || 1)));
+            const x = 50 + (idx * ((viewBoxWidth - 100) / (series.length - 1 || 1)));
             const y = 350 - (point / maxPoints * 300);
             return `${x},${y}`;
         }).join(' ');
         
-        svg += `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" opacity="0.7"/>`;
+        svg += `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" opacity="0.8"/>`;
         
         // Add points
         series.forEach((point, idx) => {
-            const x = 50 + (idx * (700 / (series.length - 1 || 1)));
+            const x = 50 + (idx * ((viewBoxWidth - 100) / (series.length - 1 || 1)));
             const y = 350 - (point / maxPoints * 300);
-            svg += `<circle cx="${x}" cy="${y}" r="4" fill="${color}"/>`;
+            svg += `<circle cx="${x}" cy="${y}" r="5" fill="${color}" stroke="white" stroke-width="1"/>`;
         });
     });
     
@@ -2351,13 +2431,39 @@ function renderStandingsGraph(sortedUsers) {
     Object.keys(userSeries).forEach((username, userIdx) => {
         const color = colors[userIdx % colors.length];
         const user = sortedUsers.find(u => u.username === username);
-        svg += `<circle cx="60" cy="${legendY}" r="6" fill="${color}"/>
-                <text x="75" y="${legendY + 4}" font-size="12" fill="var(--text-primary)">${user?.avatar || ''} ${username}</text>`;
+        svg += `<circle cx="${viewBoxWidth - 150}" cy="${legendY}" r="6" fill="${color}"/>
+                <text x="${viewBoxWidth - 135}" y="${legendY + 4}" font-size="12" fill="var(--text-primary)">${user?.avatar || ''} ${username}</text>`;
         legendY += 20;
     });
     
-    svg += '</svg>';
+    svg += '</svg></div>';
     graphContainer.innerHTML = svg;
+    
+    // Add zoom button listeners
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const zoomResetBtn = document.getElementById('zoomResetBtn');
+    
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', () => {
+            window.graphZoomLevel = Math.min((window.graphZoomLevel || 1) * 1.5, 3);
+            renderStandingsGraph(sortedUsers);
+        });
+    }
+    
+    if (zoomOutBtn) {
+        zoomOutBtn.addEventListener('click', () => {
+            window.graphZoomLevel = Math.max((window.graphZoomLevel || 1) / 1.5, 0.5);
+            renderStandingsGraph(sortedUsers);
+        });
+    }
+    
+    if (zoomResetBtn) {
+        zoomResetBtn.addEventListener('click', () => {
+            window.graphZoomLevel = 1;
+            renderStandingsGraph(sortedUsers);
+        });
+    }
 }
 
 // CSV Export
@@ -2824,15 +2930,23 @@ function renderRaceResultsPage() {
     const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
     const hasPublishedResults = latestRace && currentRace && latestRace.name === currentRace.name;
     
-    // Show published results to everyone (admins and players)
+    // Show published results with spoiler alert
     const raceResultsDisplay = document.getElementById('raceResultsDisplay');
     const raceNoResults = document.getElementById('raceNoResults');
+    const raceResultsSpoiler = document.getElementById('raceResultsSpoiler');
     
     if (latestRace) {
-        if (raceResultsDisplay) raceResultsDisplay.style.display = 'block';
+        // Show spoiler alert, hide results initially
+        if (raceResultsSpoiler) raceResultsSpoiler.style.display = 'block';
+        if (raceResultsDisplay) raceResultsDisplay.style.display = 'none';
         if (raceNoResults) raceNoResults.style.display = 'none';
-        displayRaceResultsForPlayers(latestRace);
+        
+        // Store latest race for display when spoiler is clicked
+        if (raceResultsSpoiler) {
+            raceResultsSpoiler.dataset.raceId = latestRace.id;
+        }
     } else {
+        if (raceResultsSpoiler) raceResultsSpoiler.style.display = 'none';
         if (raceResultsDisplay) raceResultsDisplay.style.display = 'none';
         if (raceNoResults) raceNoResults.style.display = 'block';
     }
@@ -2844,7 +2958,24 @@ function renderRaceResultsPage() {
         
         // Show banner with most recently completed race
         if (raceBanner && currentRace) {
-            raceBanner.innerHTML = `<div><strong>${currentRace.name}</strong> — ${hasPublishedResults ? 'Results Published' : 'Enter Race Results'}</div>`;
+            const editBtn = hasPublishedResults ? `<button id="editRaceResultsBtn" class="btn-secondary" style="margin-left: 10px; padding: 5px 10px;">✏️ Edit Results</button>` : '';
+            raceBanner.innerHTML = `<div style="display: flex; align-items: center; flex-wrap: wrap;"><strong>${currentRace.name}</strong> — ${hasPublishedResults ? 'Results Published' : 'Enter Race Results'}${editBtn}</div>`;
+            
+            // Add edit button listener
+            setTimeout(() => {
+                const editBtnEl = document.getElementById('editRaceResultsBtn');
+                if (editBtnEl) {
+                    editBtnEl.addEventListener('click', () => {
+                        if (raceResultsEditor) {
+                            raceResultsEditor.style.display = 'block';
+                            // Load existing results into editor
+                            if (latestRace && String(latestRace.id) === String(currentRace.id)) {
+                                loadRaceResultsIntoEditor(latestRace);
+                            }
+                        }
+                    });
+                }
+            }, 100);
         } else if (raceBanner) {
             raceBanner.innerHTML = '<strong>No completed race found. Please complete a race session in Calendar first.</strong>';
         }

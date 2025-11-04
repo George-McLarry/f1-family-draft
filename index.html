@@ -195,8 +195,16 @@
                     </div>
                 </div>
             </div>
+            <div id="raceResultsSpoiler" style="display: none; margin-top: 20px; padding: 20px; background: var(--warning); border-radius: 8px; text-align: center;">
+                <h3 style="color: var(--text-primary); margin-bottom: 10px;">⚠️ Spoiler Alert! ⚠️</h3>
+                <p style="color: var(--text-primary); margin-bottom: 15px;">This page contains race results. Only proceed if you have watched the race or are happy with viewing the results.</p>
+                <button id="showRaceResultsBtn" class="btn-primary">View Race Results</button>
+            </div>
             <div id="raceResultsDisplay" style="display: none;">
-                <h3 id="raceResultsTitle"></h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 id="raceResultsTitle"></h3>
+                    <button id="hideRaceResultsBtn" class="btn-secondary" style="padding: 8px 15px;">Hide Results</button>
+                </div>
                 <div id="raceResultsTable"></div>
             </div>
             <div id="raceNonAdmin">
