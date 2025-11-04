@@ -885,7 +885,7 @@ function submitDraft() {
     // Update banner immediately to show "Submitted!"
     updateDraftDisplay();
     
-    alert('Draft submitted! Your ranking is saved for this race. You can still make changes.');
+    // Alert removed - banner already shows "Submitted ✅" status
 }
 
 // Draft window helpers
@@ -1526,7 +1526,9 @@ function renderPolePicksCurrent(currentRace) {
     if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
     if (!state.bonusPicks.pole) state.bonusPicks.pole = {};
     const forUser = state.bonusPicks.pole[user.id] || {};
-    let currentPick = forUser[currentRace.id] || '';
+    // Try both string and number formats for raceId (defensive lookup)
+    const raceIdStr = String(currentRace.id);
+    let currentPick = forUser[raceIdStr] || forUser[currentRace.id] || '';
     if (!currentPick) {
         const last = Object.entries(forUser).sort((a,b)=>parseInt(b[0])-parseInt(a[0]))[0];
         if (last) currentPick = last[1];
@@ -1594,6 +1596,27 @@ function renderPolePicksCurrent(currentRace) {
         const driverId = parseInt(e.dataTransfer.getData('text/plain'));
         savePolePick(user.id, driverId, currentRace.id);
         renderPolePicksCurrent(currentRace);
+        // Refresh bonus picks display to show updated pole
+        renderBonusPicks();
+    });
+    
+    // Auto-scroll when dragging near top/bottom of page
+    poleDropZone.addEventListener('dragenter', (e) => {
+        const scrollInterval = setInterval(() => {
+            const scrollThreshold = 100;
+            const scrollSpeed = 10;
+            const mouseY = e.clientY;
+            const windowHeight = window.innerHeight;
+            
+            if (mouseY < scrollThreshold) {
+                window.scrollBy(0, -scrollSpeed);
+            } else if (mouseY > windowHeight - scrollThreshold) {
+                window.scrollBy(0, scrollSpeed);
+            }
+        }, 50);
+        
+        poleDropZone.addEventListener('dragleave', () => clearInterval(scrollInterval), { once: true });
+        poleDropZone.addEventListener('drop', () => clearInterval(scrollInterval), { once: true });
     });
     
     poleBox.appendChild(poleDropZone);
@@ -1613,7 +1636,9 @@ function renderTop5PicksCurrent(currentRace) {
     if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
     if (!state.bonusPicks.top5) state.bonusPicks.top5 = {};
     const forUser = state.bonusPicks.top5[user.id] || {};
-    const currentTop5 = forUser[currentRace.id] || [];
+    // Try both string and number formats for raceId (defensive lookup)
+    const raceIdStr = String(currentRace.id);
+    const currentTop5 = forUser[raceIdStr] || forUser[currentRace.id] || [];
     
     const container = document.createElement('div');
     container.style.display = 'grid';
@@ -1692,9 +1717,30 @@ function renderTop5PicksCurrent(currentRace) {
             if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
             if (!state.bonusPicks.top5) state.bonusPicks.top5 = {};
             if (!state.bonusPicks.top5[user.id]) state.bonusPicks.top5[user.id] = {};
-            state.bonusPicks.top5[user.id][currentRace.id] = cleaned;
+            // Normalize raceId to string for consistency
+            const raceIdStr = String(currentRace.id);
+            state.bonusPicks.top5[user.id][raceIdStr] = cleaned;
             saveState();
             renderTop5PicksCurrent(currentRace);
+        });
+        
+        // Auto-scroll when dragging near top/bottom of page
+        zone.addEventListener('dragenter', (e) => {
+            const scrollInterval = setInterval(() => {
+                const scrollThreshold = 100;
+                const scrollSpeed = 10;
+                const mouseY = e.clientY;
+                const windowHeight = window.innerHeight;
+                
+                if (mouseY < scrollThreshold) {
+                    window.scrollBy(0, -scrollSpeed);
+                } else if (mouseY > windowHeight - scrollThreshold) {
+                    window.scrollBy(0, scrollSpeed);
+                }
+            }, 50);
+            
+            zone.addEventListener('dragleave', () => clearInterval(scrollInterval), { once: true });
+            zone.addEventListener('drop', () => clearInterval(scrollInterval), { once: true });
         });
         
         top5Zones.appendChild(zone);
@@ -1722,10 +1768,16 @@ function savePolePick(userId, driverId, raceId) {
     if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
     if (!state.bonusPicks.pole) state.bonusPicks.pole = {};
     if (!state.bonusPicks.pole[userId]) state.bonusPicks.pole[userId] = {};
+    // Normalize raceId to string for consistency (matches how we retrieve it)
+    const raceIdStr = String(raceId);
     if (driverId) {
-        state.bonusPicks.pole[userId][raceId] = parseInt(driverId);
+        state.bonusPicks.pole[userId][raceIdStr] = parseInt(driverId);
     } else {
-        delete state.bonusPicks.pole[userId][raceId];
+        delete state.bonusPicks.pole[userId][raceIdStr];
+        // Also delete numeric key if it exists (cleanup)
+        if (typeof raceId === 'number') {
+            delete state.bonusPicks.pole[userId][raceId];
+        }
     }
     saveState();
 }
@@ -1777,7 +1829,18 @@ function submitBonuses() {
     if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
     if (!state.bonusPicks.pole) state.bonusPicks.pole = {};
     if (!state.bonusPicks.top5) state.bonusPicks.top5 = {};
+    if (!state.bonusPicks.pole[state.currentUser]) state.bonusPicks.pole[state.currentUser] = {};
     if (!state.bonusPicks.top5[state.currentUser]) state.bonusPicks.top5[state.currentUser] = {};
+    
+    // Normalize existing pole and top5 picks to use string raceId for consistency
+    const poleForUser = state.bonusPicks.pole[state.currentUser];
+    if (poleForUser && typeof poleForUser[currentRace.id] !== 'undefined' && !poleForUser[raceIdStr]) {
+        poleForUser[raceIdStr] = poleForUser[currentRace.id];
+    }
+    const top5ForUser = state.bonusPicks.top5[state.currentUser];
+    if (top5ForUser && typeof top5ForUser[currentRace.id] !== 'undefined' && !top5ForUser[raceIdStr]) {
+        top5ForUser[raceIdStr] = top5ForUser[currentRace.id];
+    }
 
     // Defensive: if nothing was set via drag/drop yet, keep empty but still allow submission
     // Mark submission for this race (mirrors draft submission behavior)
@@ -1796,9 +1859,17 @@ function submitBonuses() {
         submitBtn.disabled = true;
         setTimeout(() => { submitBtn.disabled = false; }, 1200);
     }
-    // Refresh banners so the UI shows “Submitted” state immediately
+    // Refresh banners so the UI shows "Submitted" state immediately
     try { renderBonusPicks(); } catch (e) {}
     try { updateDraftDisplay(); } catch (e) {}
+    
+    // Force refresh "Who Have I Got?" if it's visible to show updated pole pick
+    const myDriversDisplay = document.getElementById('myDriversDisplay');
+    if (myDriversDisplay && myDriversDisplay.style.display !== 'none') {
+        setTimeout(() => {
+            showMyDriversForRace();
+        }, 100);
+    }
 
     alert('Bonuses submitted for this race!');
 }
@@ -3222,6 +3293,37 @@ function showRankingsInterface() {
             e.preventDefault();
         });
         
+        // Auto-scroll when dragging near top/bottom of page
+        let scrollInterval = null;
+        item.addEventListener('dragstart', () => {
+            // Start scroll detection when drag starts
+            scrollInterval = setInterval(() => {
+                const scrollThreshold = 100; // pixels from edge
+                const scrollSpeed = 15; // pixels per check
+                // Use document.elementFromPoint or track mouse position
+                // For now, check if we're near viewport edges
+                const scrollY = window.scrollY || window.pageYOffset;
+                const viewportHeight = window.innerHeight;
+                const documentHeight = document.documentElement.scrollHeight;
+                
+                // If near top of viewport and can scroll up
+                if (scrollY < scrollThreshold && scrollY > 0) {
+                    window.scrollBy(0, -scrollSpeed);
+                }
+                // If near bottom of viewport and can scroll down
+                else if (scrollY + viewportHeight > documentHeight - scrollThreshold && scrollY + viewportHeight < documentHeight) {
+                    window.scrollBy(0, scrollSpeed);
+                }
+            }, 50);
+        });
+        
+        item.addEventListener('dragend', () => {
+            if (scrollInterval) {
+                clearInterval(scrollInterval);
+                scrollInterval = null;
+            }
+        });
+        
         item.addEventListener('drop', (e) => {
             e.preventDefault();
             const draggedId = parseInt(e.dataTransfer.getData('text/plain'));
@@ -3965,9 +4067,11 @@ function showMyDriversForRace() {
     const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
     
     // Get Pole bonus pick
-    const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] && state.bonusPicks.pole[state.currentUser][raceIdStr]
-        ? state.bonusPicks.pole[state.currentUser][raceIdStr]
+    // Try both string and number formats for raceId (defensive lookup)
+    const polePickObj = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] 
+        ? state.bonusPicks.pole[state.currentUser] 
         : null;
+    const polePick = polePickObj ? (polePickObj[raceIdStr] || polePickObj[mostRecentCompleted.id] || null) : null;
     const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
     
     // Build display with banner showing race name
@@ -3987,7 +4091,8 @@ function showMyDriversForRace() {
     </div>`;
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
-        <strong>Top 5:</strong> ${top5Drivers.length > 0 ? top5Drivers.map((d, i) => `${i + 1}. ${d.name} (${d.team})`).join('<br>') : 'Not picked'}
+        <strong>Top 5:</strong><br>
+        ${top5Drivers.length > 0 ? top5Drivers.map((d, i) => `<div style="margin-top: ${i > 0 ? '8px' : '4px'}; white-space: normal; word-wrap: break-word;">${i + 1}. ${d.name} (${d.team})</div>`).join('') : 'Not picked'}
     </div>`;
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
