@@ -1734,17 +1734,45 @@ function saveTop5Pick(userId, index, driverId, raceId) {
 }
 
 function submitBonuses() {
+    // Ensure a user is signed in
+    if (!state.currentUser) {
+        alert('Please sign in first using the header dropdown.');
+        return;
+    }
+    // Ensure there is an active draft window
     const currentRace = getCurrentDraftRace();
     if (!currentRace) {
         alert('No open draft/bonus window at the moment.');
         return;
     }
+    const raceIdStr = String(currentRace.id);
+    // Ensure picks structures exist
+    if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
+    if (!state.bonusPicks.pole) state.bonusPicks.pole = {};
+    if (!state.bonusPicks.top5) state.bonusPicks.top5 = {};
+    if (!state.bonusPicks.top5[state.currentUser]) state.bonusPicks.top5[state.currentUser] = {};
+
+    // Defensive: if nothing was set via drag/drop yet, keep empty but still allow submission
+    // Mark submission for this race (mirrors draft submission behavior)
     if (!state.submissions) state.submissions = { draft: {}, bonus: {} };
-    if (!state.submissions.bonus[currentRace.id]) state.submissions.bonus[currentRace.id] = {};
-    state.submissions.bonus[currentRace.id][state.currentUser] = true;
+    if (!state.submissions.bonus) state.submissions.bonus = {};
+    if (!state.submissions.bonus[raceIdStr]) state.submissions.bonus[raceIdStr] = {};
+    state.submissions.bonus[raceIdStr][state.currentUser] = true;
+
+    // Persist
     saveState();
-    // Push immediately for faster sharing
     if (checkFirebase()) saveStateToFirebase();
+
+    // Small UX: disable the button briefly and update banner
+    const submitBtn = document.getElementById('submitBonusBtn');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        setTimeout(() => { submitBtn.disabled = false; }, 1200);
+    }
+    // Refresh banners so the UI shows “Submitted” state immediately
+    try { renderBonusPicks(); } catch (e) {}
+    try { updateDraftDisplay(); } catch (e) {}
+
     alert('Bonuses submitted for this race!');
 }
 
