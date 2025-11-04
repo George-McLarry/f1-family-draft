@@ -182,6 +182,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 loadState();
                 // Removed one-off cleanup: do not clear users on load
+                // One-time automatic reset of test standings after this update
+                try {
+                    if (!localStorage.getItem('resetPointsDone')) {
+                        // Reset standings to start fresh (points will be recalculated for future races)
+                        state.standings = {};
+                        // Persist immediately
+                        saveState();
+                        localStorage.setItem('resetPointsDone', 'true');
+                        console.log('✅ Standings reset to 0 for new season start');
+                    }
+                } catch (e) {
+                    console.warn('Standings reset skipped:', e);
+                }
             } catch (e) {
                 console.error('Error loading from Firebase:', e);
                 updateSyncStatus('error');
@@ -191,6 +204,13 @@ document.addEventListener('DOMContentLoaded', () => {
             updateSyncStatus('local');
             try {
                 loadStateFromLocalStorage();
+                // Also apply one-time reset in local mode
+                if (!localStorage.getItem('resetPointsDone')) {
+                    state.standings = {};
+                    saveState();
+                    localStorage.setItem('resetPointsDone', 'true');
+                    console.log('✅ Standings reset to 0 for new season start (local)');
+                }
             } catch (e) {
                 console.error('Error loading from localStorage:', e);
             }
