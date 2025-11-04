@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="F1 Family Draft - Fantasy F1 Drafting League">
+    <meta http-equiv="Cache-Control" content="no-store, max-age=0">
+    <meta name="theme-color" content="#e10600">
+    <title>F1 Family Draft</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1>🏁 F1 Family Draft</h1>
+                <div class="header-actions">
+                    <span id="syncStatus" class="sync-status" title="Data sync status">🔄 Local</span>
+                    <span id="currentUserBadge" class="user-badge" style="cursor:pointer;" title="Click to sign out"></span>
+                    <select id="currentUserSelect" class="icon-btn" title="Sign in" style="background:#fff;color:#000;display:none;"></select>
+                    <button id="darkModeToggle" class="icon-btn" title="Toggle dark mode">🌙</button>
+                </div>
+            </div>
+            <div id="installPrompt" class="install-prompt" style="display: none;">
+                <p>Install this app for a better experience!</p>
+                <button id="installBtn" class="btn-primary btn-small">Install</button>
+                <button id="dismissInstall" class="btn-secondary btn-small">Dismiss</button>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="tabs" id="mainTabs">
+            <button class="tab-btn active" data-tab="calendar">📅 Calendar</button>
+            <button class="tab-btn" data-tab="drivers">👥 Drivers</button>
+            <button class="tab-btn" data-tab="users">Users</button>
+            <button class="tab-btn" data-tab="draft">Draft</button>
+            <button class="tab-btn" data-tab="bonuses">Bonus</button>
+            <button class="tab-btn" data-tab="race">Results</button>
+            <button class="tab-btn" data-tab="standings">Standings</button>
+        </nav>
+
+        <!-- Calendar Tab -->
+        <section id="calendar-tab" class="tab-content active">
+            <h2>Race Calendar</h2>
+            <div id="calendarAdminControls" class="admin-controls">
+                <button id="addRaceBtn" class="btn-primary">➕ Add Session</button>
+                <button id="editRaceBtn" class="btn-secondary" style="display: none;">✏️ Edit Race</button>
+            </div>
+            <div id="calendarList" class="calendar-list">
+                <p style="padding: 20px;">Loading calendar...</p>
+            </div>
+            
+            <!-- Add/Edit Race Modal -->
+            <div id="raceModal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 id="modalTitle">Add Session</h3>
+                        <button class="modal-close" id="closeModal">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <label>Race Name:</label>
+                        <input type="text" id="modalRaceName" placeholder="e.g., Bahrain GP">
+                        <label>Race Date:</label>
+                        <input type="date" id="modalRaceDate">
+                        <label>Draft Deadline (Date & Time):</label>
+                        <input type="date" id="modalDeadlineDate">
+                        <input type="time" id="modalDeadlineTime">
+                        <label>Status:</label>
+                        <select id="modalRaceStatus">
+                            <option value="upcoming">Upcoming</option>
+                            <option value="drafting">Drafting Open</option>
+                            <option value="completed">Completed</option>
+                        </select>
+                        <div class="modal-actions">
+                            <button id="saveRaceCalendarBtn" class="btn-primary">Save</button>
+                            <button id="cancelRaceBtn" class="btn-secondary">Cancel</button>
+                            <button id="deleteRaceBtn" class="btn-danger" style="display: none;">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Drivers Tab -->
+        <section id="drivers-tab" class="tab-content">
+            <h2>2025 F1 Drivers</h2>
+            <div class="search-bar">
+                <input type="text" id="driverSearch" placeholder="Search drivers or teams...">
+                <select id="teamFilter">
+                    <option value="">All Teams</option>
+                </select>
+            </div>
+            <div id="driversList" class="drivers-grid"></div>
+        </section>
+
+        <!-- Users Tab -->
+        <section id="users-tab" class="tab-content">
+            <h2>Users</h2>
+            <div id="userForm" class="form-section">
+                <input type="text" id="usernameInput" placeholder="Username" maxlength="20">
+                <select id="avatarSelect">
+                    <option value="🏎️">🏎️</option>
+                    <option value="🏁">🏁</option>
+                    <option value="🏆">🏆</option>
+                    <option value="🥇">🥇</option>
+                    <option value="🔥">🔥</option>
+                    <option value="⚡">⚡</option>
+                    <option value="💨">💨</option>
+                    <option value="🎯">🎯</option>
+                    <option value="🚗">🚗</option>
+                    <option value="🏴">🏴</option>
+                </select>
+                <button id="addUserBtn" class="btn-primary">Add User</button>
+            </div>
+            <div id="usersList" class="users-grid"></div>
+        </section>
+
+        <!-- Draft Tab -->
+        <section id="draft-tab" class="tab-content">
+            <h2>Draft</h2>
+            <div id="draftBanner" class="info-box" style="margin-bottom: 10px;"></div>
+            <div id="draftInfo" class="draft-info"></div>
+            <div id="draftStatus" class="draft-status"></div>
+            
+            <!-- Rankings Interface (always visible) -->
+            <div id="rankingsInterface" style="display: block;">
+                <h3>Rank Your Drivers</h3>
+                <p class="info-text">Drag drivers to order them. 1st = Best, 20th = Worst.</p>
+                <div id="rankingsList" class="rankings-list"></div>
+                <button id="submitDraftBtn" class="btn-primary">Submit Draft</button>
+            </div>
+            
+            <div id="draftProgress" class="draft-progress"></div>
+            <div id="draftPicks" class="draft-picks"></div>
+            
+            <!-- Undo Button -->
+            <div id="undoContainer" style="display: none; margin-top: 20px;">
+                <button id="undoBtn" class="btn-secondary">↶ Undo Last Action</button>
+            </div>
+        </section>
+
+        <!-- Bonus Picks Tab -->
+        <section id="bonuses-tab" class="tab-content">
+            <h2>Bonus Picks</h2>
+            <div id="bonusBanner" class="info-box" style="margin-bottom: 10px;"></div>
+            <div id="bonusPicksContainer">
+                <div class="bonus-section">
+                    <h3>Pole Position</h3>
+                    <div id="polePicks" class="pole-picks"></div>
+                </div>
+                <div class="bonus-section">
+                    <h3>Top 5 Finishers</h3>
+                    <div id="top5Picks" class="top5-picks"></div>
+                </div>
+                <div style="margin-top:12px;">
+                    <button id="submitBonusBtn" class="btn-primary">Submit Bonuses</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Race Results Tab -->
+        <section id="race-tab" class="tab-content">
+            <h2>Race Results</h2>
+            <div id="raceBanner" class="info-box" style="margin-bottom: 10px;"></div>
+            <div id="raceAdminOnly" class="admin-controls">
+                <div id="raceResultsForm" class="race-results-form" style="display: none;">
+                    <h3>Finishing Positions</h3>
+                    <p class="info-text">Select driver for each position. Once selected, driver is removed from other positions. Use checkboxes for DNF/DNS.</p>
+                    <div id="positionsGrid" class="positions-grid"></div>
+                    <div class="race-bonus-inputs">
+                        <label>
+                            <strong>Pole Position:</strong>
+                            <select id="poleResult"></select>
+                        </label>
+                    </div>
+                    <button id="saveRaceBtn" class="btn-primary" style="margin-top: 15px;">Save Race Results</button>
+                </div>
+            </div>
+            <div id="raceNonAdmin" style="display: none;">
+                <p>Only admins can edit race results. Race results will appear here once posted by an admin.</p>
+            </div>
+        </section>
+
+        <!-- Standings Tab -->
+        <section id="standings-tab" class="tab-content">
+            <h2>Standings</h2>
+            <div id="latestRaceStandings" class="latest-race-standings"></div>
+            <div id="standingsHidden" class="standings-hidden">
+                <div class="warning-box">
+                    <h3>⚠️ Warning</h3>
+                    <p><strong>This action will reveal Season Standings.</strong></p>
+                    <p>Do NOT click if you do not wish to see Season Standings!</p>
+                    <button id="revealStandingsBtn" class="btn-primary btn-large">View Season Standings</button>
+                </div>
+            </div>
+            <div id="standingsVisible" style="display: none;">
+                <div class="standings-controls">
+                    <select id="standingsRaceFilter">
+                        <option value="all">All Races</option>
+                    </select>
+                    <button id="hideStandingsBtn" class="btn-secondary">Hide Season Standings</button>
+                    <button id="exportCSVBtn" class="btn-secondary">Export CSV</button>
+                </div>
+                <div id="standingsTable" class="standings-table"></div>
+                <div id="standingsGraph" class="standings-graph"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Firebase SDK for Shared Data - MUST load before script.js -->
+    <script>
+        // Firebase configuration
+        window.firebaseConfig = {
+            apiKey: "AIzaSyDDkHdrYn0ZRjtYBehp5GSqEE_0u5fZdwE",
+            authDomain: "f1-family-draft.firebaseapp.com",
+            databaseURL: "https://f1-family-draft-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "f1-family-draft",
+            storageBucket: "f1-family-draft.firebasestorage.app",
+            messagingSenderId: "163181357569",
+            appId: "1:163181357569:web:11c6d10ca8497aab8dae00",
+            measurementId: "G-9WW85RBE31"
+        };
+        
+        // Track Firebase initialization state
+        window.firebaseInitialized = false;
+        window.firebaseReady = false;
+        
+        // Function to initialize Firebase
+        window.initFirebaseNow = function() {
+            if (window.firebaseInitialized) return;
+            
+            if (typeof firebase !== 'undefined' && firebase.initializeApp) {
+                try {
+                    firebase.initializeApp(window.firebaseConfig);
+                    window.firebaseInitialized = true;
+                    window.firebaseReady = true;
+                    console.log('Firebase initialized successfully');
+                    window.dispatchEvent(new Event('firebaseReady'));
+                } catch (error) {
+                    console.error('Firebase initialization error:', error);
+                    window.firebaseReady = false;
+                }
+            }
+        };
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/12.5.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/12.5.0/firebase-database-compat.js"></script>
+    <script>
+        // Initialize Firebase as soon as scripts load
+        (function() {
+            // Try immediately
+            window.initFirebaseNow();
+            
+            // Also try on script load
+            if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                window.initFirebaseNow();
+            }
+            
+            // Listen for when scripts finish loading
+            document.addEventListener('DOMContentLoaded', window.initFirebaseNow);
+            
+            // Poll until Firebase is ready (max 10 seconds)
+            let attempts = 0;
+            const maxAttempts = 50; // 50 * 200ms = 10 seconds
+            const checkInterval = setInterval(function() {
+                attempts++;
+                window.initFirebaseNow();
+                if (window.firebaseInitialized || attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                }
+            }, 200);
+        })();
+    </script>
+    
+    <!-- Main app script - loads after Firebase (cache-busted) -->
+    <script src="script.js?v=20251103v3"></script>
+    <script>
+        // Service Worker Registration for PWA (only on HTTPS/localhost)
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(() => {
+                    // Service worker registration failed (not critical, especially for file://)
+                });
+            });
+        }
+
+        // Install prompt
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('installPrompt').style.display = 'block';
+        });
+
+        document.getElementById('installBtn')?.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    document.getElementById('installPrompt').style.display = 'none';
+                }
+                deferredPrompt = null;
+            }
+        });
+
+        document.getElementById('dismissInstall')?.addEventListener('click', () => {
+            document.getElementById('installPrompt').style.display = 'none';
+        });
+    </script>
+</body>
+</html>
