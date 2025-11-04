@@ -678,6 +678,53 @@ function setupEventListeners() {
     if (exportCSVBtn) {
         exportCSVBtn.addEventListener('click', exportToCSV);
     }
+    const editSeasonPointsBtn = document.getElementById('editSeasonPointsBtn');
+    if (editSeasonPointsBtn) {
+        editSeasonPointsBtn.addEventListener('click', () => {
+            if (!isAdmin()) return;
+            const modal = document.getElementById('seasonAdjustModal');
+            const list = document.getElementById('seasonAdjustList');
+            if (!modal || !list) return;
+            list.innerHTML = '';
+            const adjustments = state.seasonAdjustments || {};
+            state.users.forEach(user => {
+                const row = document.createElement('div');
+                row.style.display = 'flex';
+                row.style.alignItems = 'center';
+                row.style.justifyContent = 'space-between';
+                row.style.gap = '10px';
+                row.style.margin = '6px 0';
+                row.innerHTML = `<div style="min-width:160px;">${user.avatar} ${user.username}</div><input type="number" id="seasonAdj-${user.id}" value="${parseInt(adjustments[user.id] || 0, 10)}" style="width:120px;padding:8px;border:1px solid var(--border-color);border-radius:6px;" />`;
+                list.appendChild(row);
+            });
+            modal.style.display = 'block';
+        });
+    }
+    const seasonAdjustClose = document.getElementById('seasonAdjustClose');
+    if (seasonAdjustClose) {
+        seasonAdjustClose.addEventListener('click', () => {
+            const modal = document.getElementById('seasonAdjustModal');
+            if (modal) modal.style.display = 'none';
+        });
+    }
+    const seasonAdjustSave = document.getElementById('seasonAdjustSave');
+    if (seasonAdjustSave) {
+        seasonAdjustSave.addEventListener('click', () => {
+            if (!isAdmin()) return;
+            if (!state.seasonAdjustments) state.seasonAdjustments = {};
+            state.users.forEach(user => {
+                const el = document.getElementById(`seasonAdj-${user.id}`);
+                if (el) {
+                    const val = parseInt(el.value, 10) || 0;
+                    state.seasonAdjustments[user.id] = val;
+                }
+            });
+            saveState();
+            updateStandings();
+            const modal = document.getElementById('seasonAdjustModal');
+            if (modal) modal.style.display = 'none';
+        });
+    }
     
     // New event listeners
     const revealStandingsBtn = document.getElementById('revealStandingsBtn');
@@ -2337,11 +2384,10 @@ function updateStandings() {
     
     state.users.forEach(user => {
         userTotals[user.id] = {
-            id: user.id, // Include ID for graph function
+            id: user.id,
             username: user.username,
             avatar: user.avatar,
-            grojean: 0,
-            chilton: 0,
+            draft: 0, // grojean + chilton
             poleBonus: 0,
             top5Bonus: 0,
             total: 0
@@ -2355,8 +2401,7 @@ function updateStandings() {
             Object.keys(raceStandings).forEach(userId => {
                 if (userTotals[userId]) {
                     const points = raceStandings[userId];
-                    userTotals[userId].grojean += points.grojean || 0;
-                    userTotals[userId].chilton += points.chilton || 0;
+                    userTotals[userId].draft += (points.grojean || 0) + (points.chilton || 0);
                     userTotals[userId].poleBonus += points.poleBonus || 0;
                     userTotals[userId].top5Bonus += points.top5Bonus || 0;
                     userTotals[userId].total += points.total || 0;
@@ -2371,14 +2416,22 @@ function updateStandings() {
             Object.keys(raceStandings).forEach(userId => {
                 if (userTotals[userId]) {
                     const points = raceStandings[userId];
-                    userTotals[userId].grojean = points.grojean || 0;
-                    userTotals[userId].chilton = points.chilton || 0;
+                    userTotals[userId].draft = (points.grojean || 0) + (points.chilton || 0);
                     userTotals[userId].poleBonus = points.poleBonus || 0;
                     userTotals[userId].top5Bonus = points.top5Bonus || 0;
                     userTotals[userId].total = points.total || 0;
                 }
             });
         }
+    }
+
+    // Apply season adjustments (admin edits) to totals only for All Races view
+    if (filter === 'all') {
+        const adjustments = state.seasonAdjustments || {};
+        Object.keys(userTotals).forEach(uid => {
+            const delta = parseInt(adjustments[uid] || 0, 10) || 0;
+            userTotals[uid].total += delta;
+        });
     }
 
     // Sort by total
@@ -2394,8 +2447,7 @@ function updateStandings() {
                 <tr>
                     <th>Rank</th>
                     <th>User</th>
-                    <th>Grojean</th>
-                    <th>Chilton</th>
+                    <th>Draft</th>
                     <th>Pole Bonus</th>
                     <th>Top 5 Bonus</th>
                     <th>Total</th>
@@ -2406,8 +2458,7 @@ function updateStandings() {
                     <tr>
                         <td>${index + 1}</td>
                         <td>${user.avatar} ${user.username}</td>
-                        <td>${user.grojean}</td>
-                        <td>${user.chilton}</td>
+                        <td>${user.draft}</td>
                         <td>${user.poleBonus}</td>
                         <td>${user.top5Bonus}</td>
                         <td><strong>${user.total}</strong></td>
@@ -3837,6 +3888,9 @@ function showMyDriversForRace() {
         alert('Please sign in first using the header dropdown.');
         return;
     }
+    if (!confirm('Spoiler Alert!\n\nProceed only if you wish to know your drivers for the current race.')) {
+        return;
+    }
     
     // Get the most recent completed race without results
     const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
@@ -3879,11 +3933,11 @@ function showMyDriversForRace() {
     let html = '<div style="display: flex; flex-direction: column; gap: 15px;">';
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
-        <strong>Grojean:</strong> ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
+        <strong>First place:</strong> ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
     </div>`;
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
-        <strong>Chilton:</strong> ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
+        <strong>Last place:</strong> ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
     </div>`;
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
@@ -3968,11 +4022,11 @@ function renderLogs() {
                 <h4 style="margin-bottom: 10px;">Your Picks:</h4>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
                     <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>Grojean:</strong><br>
+                        <strong>First place:</strong><br>
                         ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
                     </div>
                     <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>Chilton:</strong><br>
+                        <strong>Last place:</strong><br>
                         ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
                     </div>
                     <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
@@ -3990,8 +4044,8 @@ function renderLogs() {
                 <strong style="font-size: 1.2rem;">Points Earned: ${points}</strong>
                 ${userStanding ? `
                     <div style="margin-top: 10px; font-size: 0.9rem; color: var(--text-secondary);">
-                        Grojean: ${userStanding.grojean || 0} | 
-                        Chilton: ${userStanding.chilton || 0} | 
+                        First place: ${userStanding.grojean || 0} | 
+                        Last place: ${userStanding.chilton || 0} | 
                         Pole Bonus: ${userStanding.poleBonus || 0} | 
                         Top 5 Bonus: ${userStanding.top5Bonus || 0}
                     </div>

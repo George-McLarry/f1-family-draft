@@ -122,7 +122,7 @@
                     <p id="raceInProgressName" style="font-size: 1.1rem; font-weight: bold;"></p>
                 </div>
                 <div style="text-align: center; margin: 20px 0;">
-                    <button id="showMyDriversBtn" class="btn-primary">See which driver you got!</button>
+                    <button id="showMyDriversBtn" class="btn-primary">Who Have I Got?</button>
                 </div>
                 <div id="myDriversDisplay" style="display: none; margin-top: 20px; padding: 20px; background: var(--bg-secondary); border-radius: 8px;">
                     <h4 style="margin-bottom: 15px;">Your Drivers for This Race:</h4>
@@ -240,11 +240,29 @@
                     </select>
                     <button id="hideStandingsBtn" class="btn-secondary">Hide Season Standings</button>
                     <button id="exportCSVBtn" class="btn-secondary">Export CSV</button>
+                    <button id="editSeasonPointsBtn" class="btn-secondary admin-controls">Edit Points</button>
                 </div>
                 <div id="standingsTable" class="standings-table"></div>
                 <div id="standingsGraph" class="standings-graph"></div>
             </div>
         </section>
+
+        <!-- Season Adjustments Modal -->
+        <div id="seasonAdjustModal" class="modal" style="display:none;">
+            <div class="modal-content" style="max-width:700px;">
+                <div class="modal-header">
+                    <h3>Edit Season Points</h3>
+                    <button class="modal-close" id="seasonAdjustClose">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="info-text" style="margin-bottom:10px;">Adjust totals for the season. This does not change individual races or the graph.</p>
+                    <div id="seasonAdjustList"></div>
+                    <div class="modal-actions">
+                        <button id="seasonAdjustSave" class="btn-primary">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Logs Tab -->
         <section id="logs-tab" class="tab-content">
