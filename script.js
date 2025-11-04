@@ -14,11 +14,14 @@ function generatePicksForRace(draftType, raceId) {
     
     // Use turn order (sorted by turnOrder array) - ensures fair rotation
     const turnOrder = state.turnOrder || state.users.map(u => u.id);
-    const order = submittedUsers.sort((a, b) => {
+    // Base order (ascending by turn order position)
+    const baseOrder = submittedUsers.sort((a, b) => {
         const aIndex = turnOrder.indexOf(a.id);
         const bIndex = turnOrder.indexOf(b.id);
         return aIndex - bIndex;
     });
+    // For Chilton drafts, reverse user turn order so last pick in Grojean gets first in Chilton
+    const order = isChilton ? [...baseOrder].reverse() : baseOrder;
     
     const picks = [];
     const usedDrivers = new Set();
@@ -1065,8 +1068,8 @@ function addUser() {
         return;
     }
 
-    if (state.users.length >= 10) {
-        alert('Maximum 10 users allowed');
+    if (state.users.length >= 20) {
+        alert('Maximum 20 users allowed');
         return;
     }
 
