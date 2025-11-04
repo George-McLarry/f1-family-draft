@@ -2321,6 +2321,8 @@ function updateStandings() {
     // Update race filter - use calendar as single source of truth
     const raceFilter = document.getElementById('standingsRaceFilter');
     if (raceFilter) {
+        // Preserve current selection while rebuilding options
+        const prevSelection = raceFilter.value || filter;
         raceFilter.innerHTML = '<option value="all">All Races</option>';
         // Use calendar races instead of state.races for consistency
         const calendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
@@ -2330,6 +2332,12 @@ function updateStandings() {
             option.textContent = race.name;
             raceFilter.appendChild(option);
         });
+        // Restore selection if possible
+        if (prevSelection && Array.from(raceFilter.options).some(o => o.value === prevSelection)) {
+            raceFilter.value = prevSelection;
+        } else {
+            raceFilter.value = 'all';
+        }
     }
 
     // Calculate totals
