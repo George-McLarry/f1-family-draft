@@ -721,6 +721,8 @@ function setupEventListeners() {
             });
             saveState();
             updateStandings();
+            // If standings are hidden behind spoiler, ensure any open view refreshes
+            updateStandingsDisplay && updateStandingsDisplay();
             const modal = document.getElementById('seasonAdjustModal');
             if (modal) modal.style.display = 'none';
         });
