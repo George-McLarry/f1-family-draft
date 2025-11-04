@@ -368,16 +368,16 @@ function loadStateFromFirebase() {
             if (standingsTab && standingsTab.classList.contains('active')) {
                 updateStandings();
             }
-            // One-time standings reset AFTER cloud state is loaded, never overwriting users
+            // One-time draft reset for specific users (Lance, Joshua)
             try {
-                if (!localStorage.getItem('resetPointsDone')) {
-                    state.standings = {};
+                if (!localStorage.getItem('draftReset_Lance_Joshua_v1')) {
+                    resetDraftPointsForUsers(['lance','joshua']);
                     saveState();
-                    localStorage.setItem('resetPointsDone', 'true');
-                    console.log('✅ Standings reset to 0 (post-load)');
+                    localStorage.setItem('draftReset_Lance_Joshua_v1', 'true');
+                    console.log('✅ Draft points reset for Lance and Joshua');
                 }
             } catch (e) {
-                console.warn('Standings reset skipped:', e);
+                console.warn('Draft reset skipped:', e);
             }
 
             renderCalendar();
@@ -678,55 +678,7 @@ function setupEventListeners() {
     if (exportCSVBtn) {
         exportCSVBtn.addEventListener('click', exportToCSV);
     }
-    const editSeasonPointsBtn = document.getElementById('editSeasonPointsBtn');
-    if (editSeasonPointsBtn) {
-        editSeasonPointsBtn.addEventListener('click', () => {
-            if (!isAdmin()) return;
-            const modal = document.getElementById('seasonAdjustModal');
-            const list = document.getElementById('seasonAdjustList');
-            if (!modal || !list) return;
-            list.innerHTML = '';
-            const adjustments = state.seasonAdjustments || {};
-            state.users.forEach(user => {
-                const row = document.createElement('div');
-                row.style.display = 'flex';
-                row.style.alignItems = 'center';
-                row.style.justifyContent = 'space-between';
-                row.style.gap = '10px';
-                row.style.margin = '6px 0';
-                row.innerHTML = `<div style="min-width:160px;">${user.avatar} ${user.username}</div><input type="number" id="seasonAdj-${user.id}" value="${parseInt(adjustments[user.id] || 0, 10)}" style="width:120px;padding:8px;border:1px solid var(--border-color);border-radius:6px;" />`;
-                list.appendChild(row);
-            });
-            modal.style.display = 'block';
-        });
-    }
-    const seasonAdjustClose = document.getElementById('seasonAdjustClose');
-    if (seasonAdjustClose) {
-        seasonAdjustClose.addEventListener('click', () => {
-            const modal = document.getElementById('seasonAdjustModal');
-            if (modal) modal.style.display = 'none';
-        });
-    }
-    const seasonAdjustSave = document.getElementById('seasonAdjustSave');
-    if (seasonAdjustSave) {
-        seasonAdjustSave.addEventListener('click', () => {
-            if (!isAdmin()) return;
-            if (!state.seasonAdjustments) state.seasonAdjustments = {};
-            state.users.forEach(user => {
-                const el = document.getElementById(`seasonAdj-${user.id}`);
-                if (el) {
-                    const val = parseInt(el.value, 10) || 0;
-                    state.seasonAdjustments[user.id] = val;
-                }
-            });
-            saveState();
-            updateStandings();
-            // If standings are hidden behind spoiler, ensure any open view refreshes
-            updateStandingsDisplay && updateStandingsDisplay();
-            const modal = document.getElementById('seasonAdjustModal');
-            if (modal) modal.style.display = 'none';
-        });
-    }
+    // Removed Edit Season Points UI
     
     // New event listeners
     const revealStandingsBtn = document.getElementById('revealStandingsBtn');
@@ -2351,6 +2303,34 @@ function getTop5Results(results) {
         }
     }
     return top5;
+}
+
+// Reset draft (first/last place) points for specified usernames (case-insensitive)
+function resetDraftPointsForUsers(usernames) {
+    const targetNames = new Set((usernames || []).map(n => String(n).toLowerCase()))
+    const idSet = new Set(
+        (state.users || [])
+            .filter(u => u && u.username && targetNames.has(String(u.username).toLowerCase()))
+            .map(u => u.id)
+    );
+    if (idSet.size === 0) return;
+    Object.keys(state.standings || {}).forEach(raceId => {
+        const raceStandings = state.standings[raceId];
+        if (!raceStandings) return;
+        Object.keys(raceStandings).forEach(uid => {
+            const numUid = isNaN(parseInt(uid,10)) ? uid : parseInt(uid,10);
+            if (idSet.has(numUid)) {
+                const p = raceStandings[uid] || {};
+                const draftBefore = (p.grojean || 0) + (p.chilton || 0);
+                if (draftBefore !== 0) {
+                    p.grojean = 0;
+                    p.chilton = 0;
+                    p.total = (p.poleBonus || 0) + (p.top5Bonus || 0);
+                    raceStandings[uid] = p;
+                }
+            }
+        });
+    });
 }
 
     // Standings
