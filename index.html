@@ -164,6 +164,13 @@
             <h2>Race Results</h2>
             <div id="raceBanner" class="info-box" style="margin-bottom: 10px;"></div>
             <div id="raceAdminOnly" class="admin-controls">
+                <div id="racePasteSection" style="display: none;">
+                    <h3>Paste Race Results</h3>
+                    <p class="info-text">Copy and paste race results from the official F1 website. Format: Position, Driver Name, Time/Gap</p>
+                    <textarea id="raceResultsPaste" placeholder="Paste race results here (e.g., 1	Lando Norris	1:37:58.574&#10;2	Charles Leclerc	+30.324s&#10;Pole: Oscar Piastri)" style="width:100%;min-height:200px;padding:10px;font-family:monospace;margin-bottom:10px;"></textarea>
+                    <button id="parseRaceResultsBtn" class="btn-primary">Parse & Fill Results</button>
+                    <div id="parseError" style="color:var(--error);margin-top:10px;display:none;"></div>
+                </div>
                 <div id="raceResultsForm" class="race-results-form" style="display: none;">
                     <h3>Finishing Positions</h3>
                     <p class="info-text">Select driver for each position. Once selected, driver is removed from other positions. Use checkboxes for DNF/DNS.</p>
@@ -177,8 +184,14 @@
                     <button id="saveRaceBtn" class="btn-primary" style="margin-top: 15px;">Save Race Results</button>
                 </div>
             </div>
-            <div id="raceNonAdmin" style="display: none;">
-                <p>Only admins can edit race results. Race results will appear here once posted by an admin.</p>
+            <div id="raceNonAdmin">
+                <div id="raceResultsDisplay" style="display: none;">
+                    <h3 id="raceResultsTitle"></h3>
+                    <div id="raceResultsTable"></div>
+                </div>
+                <div id="raceNoResults" style="display: block;">
+                    <p>No race results posted yet.</p>
+                </div>
             </div>
         </section>
 

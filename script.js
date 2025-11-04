@@ -569,6 +569,11 @@ function setupEventListeners() {
     if (saveRaceBtn) {
         saveRaceBtn.addEventListener('click', saveRaceResults);
     }
+    
+    const parseRaceResultsBtn = document.getElementById('parseRaceResultsBtn');
+    if (parseRaceResultsBtn) {
+        parseRaceResultsBtn.addEventListener('click', parseRaceResults);
+    }
     // loadRaceBtn and loadDemoBtn removed - no longer needed
     
     // Standings
@@ -1074,10 +1079,15 @@ function deleteUser(index) {
         updateAdminControls();
         updateCurrentUserBadge();
         populateCurrentUserSelect();
-        renderUsers();
+        renderUsers(); // Re-render to remove deleted user from list
         renderBonusPicks();
         updateDraftDisplay();
         updateStandings();
+        
+        // Force UI update to ensure user is removed
+        setTimeout(() => {
+            renderUsers();
+        }, 100);
     }
 }
 
@@ -1665,13 +1675,188 @@ function renderRaceForm() {
 // loadDemoData and loadRace functions removed - no longer needed
 // Race results now automatically use current race from calendar
 
+// Parse race results from F1 official format
+function parseRaceResults() {
+    const pasteText = document.getElementById('raceResultsPaste').value.trim();
+    const parseError = document.getElementById('parseError');
+    
+    if (!pasteText) {
+        if (parseError) {
+            parseError.style.display = 'block';
+            parseError.textContent = 'Please paste race results first.';
+        }
+        return;
+    }
+    
+    const currentRace = getCurrentDraftRace();
+    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    const targetRace = completedRaces.length > 0 ? completedRaces[0] : currentRace;
+    
+    if (!targetRace) {
+        if (parseError) {
+            parseError.style.display = 'block';
+            parseError.textContent = 'No race available. Please add a race session in Calendar first.';
+        }
+        return;
+    }
+    
+    const lines = pasteText.split('\n').filter(l => l.trim());
+    const results = {};
+    const statuses = {};
+    const times = {};
+    let pole = null;
+    let classifiedPos = 1; // Track classified positions for NC drivers
+    
+    // First pass: find all classified positions
+    lines.forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.toLowerCase().startsWith('pole:')) return;
+        
+        // Match: "1	Lando Norris	1:37:58.574" or "NC	Fernando Alonso	DNF"
+        const match = trimmed.match(/^(\d+|NC)\s+([A-Za-z\s]+?)(?:\s+(.+))?$/);
+        if (match) {
+            const posStr = match[1];
+            const driverName = match[2].trim();
+            const timeOrStatus = match[3] ? match[3].trim() : '';
+            
+            if (posStr !== 'NC') {
+                const pos = parseInt(posStr);
+                if (!isNaN(pos) && pos >= 1 && pos <= 20) {
+                    classifiedPos = Math.max(classifiedPos, pos + 1);
+                }
+            }
+        }
+    });
+    
+    // Second pass: parse results
+    lines.forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        
+        // Check for pole
+        if (trimmed.toLowerCase().startsWith('pole:')) {
+            const poleName = trimmed.substring(5).trim();
+            const poleDriver = DRIVERS.find(d => 
+                d.name.toLowerCase() === poleName.toLowerCase() ||
+                poleName.toLowerCase().includes(d.name.toLowerCase())
+            );
+            if (poleDriver) {
+                pole = poleDriver.id;
+            }
+            return;
+        }
+        
+        // Match: "1	Lando Norris	1:37:58.574" or "NC	Fernando Alonso	DNF" or "17	Carlos Sainz	   DNF"
+        const match = trimmed.match(/^(\d+|NC)\s+([A-Za-z\s]+?)(?:\s+(.+))?$/);
+        if (match) {
+            const posStr = match[1];
+            const driverName = match[2].trim();
+            const timeOrStatus = match[3] ? match[3].trim() : '';
+            
+            // Find driver by name (flexible matching)
+            const driver = DRIVERS.find(d => {
+                const dName = d.name.toLowerCase();
+                const searchName = driverName.toLowerCase();
+                return dName === searchName || 
+                       searchName.includes(dName.split(' ')[0]) || 
+                       searchName.includes(dName.split(' ')[dName.split(' ').length - 1]);
+            });
+            
+            if (!driver) {
+                console.warn(`Driver not found: ${driverName}`);
+                return;
+            }
+            
+            let position = null;
+            let isClassified = true;
+            
+            if (posStr === 'NC') {
+                // Non-Classified - assign next available position but mark as NC
+                position = classifiedPos++;
+                isClassified = false;
+            } else {
+                position = parseInt(posStr);
+                if (isNaN(position) || position < 1 || position > 20) {
+                    console.warn(`Invalid position: ${posStr}`);
+                    return;
+                }
+            }
+            
+            // Check for DNF/DNS
+            const upperStatus = timeOrStatus.toUpperCase();
+            if (upperStatus.includes('DNF')) {
+                if (isClassified) {
+                    statuses[driver.id] = 'C,DNF'; // Classified DNF
+                } else {
+                    statuses[driver.id] = 'NC,DNF'; // Non-Classified DNF
+                }
+            } else if (upperStatus.includes('DNS')) {
+                statuses[driver.id] = 'DNS';
+            }
+            
+            results[position] = driver.id;
+            times[driver.id] = timeOrStatus || '';
+        }
+    });
+    
+    if (Object.keys(results).length === 0) {
+        if (parseError) {
+            parseError.style.display = 'block';
+            parseError.textContent = 'Could not parse results. Please check the format and try again.';
+        }
+        return;
+    }
+    
+    // Fill in the form
+    Object.entries(results).forEach(([pos, driverId]) => {
+        const select = document.getElementById(`pos-${pos}`);
+        if (select) {
+            select.value = driverId;
+            // Trigger change to update other selects
+            select.dispatchEvent(new Event('change'));
+        }
+        
+        // Set DNF/DNS checkboxes
+        const status = statuses[driverId];
+        if (status) {
+            if (status.includes('DNF')) {
+                const dnfCheckbox = document.getElementById(`dnf-${pos}`);
+                if (dnfCheckbox) dnfCheckbox.checked = true;
+            }
+            if (status.includes('DNS')) {
+                const dnsCheckbox = document.getElementById(`dns-${pos}`);
+                if (dnsCheckbox) dnsCheckbox.checked = true;
+            }
+        }
+    });
+    
+    // Set pole position
+    if (pole) {
+        const poleSelect = document.getElementById('poleResult');
+        if (poleSelect) {
+            poleSelect.value = pole;
+        }
+    }
+    
+    // Store times and classified status for saveRaceResults
+    if (!window.parsedRaceData) window.parsedRaceData = {};
+    window.parsedRaceData.times = times;
+    window.parsedRaceData.statuses = statuses;
+    
+    if (parseError) parseError.style.display = 'none';
+    alert(`Parsed ${Object.keys(results).length} drivers. Review and click "Save Race Results" to save.`);
+}
+
 function saveRaceResults() {
     if (!isAdmin()) {
         alert('Only admins can save race results');
         return;
     }
     
-    const currentRace = getCurrentDraftRace();
+    // Get the most recently completed race, or current draft race
+    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    const currentRace = completedRaces.length > 0 ? completedRaces[0] : getCurrentDraftRace();
+    
     if (!currentRace) {
         alert('No active race. Please add a race session in Calendar.');
         return;
@@ -1679,6 +1864,7 @@ function saveRaceResults() {
 
     const results = {};
     const statuses = {};
+    const times = {};
     let hasResults = false;
 
     for (let pos = 1; pos <= 20; pos++) {
@@ -1696,12 +1882,23 @@ function saveRaceResults() {
             }
             results[pos] = driverId;
             
-            // Check DNF/DNS checkboxes
+            // Check DNF/DNS checkboxes - preserve Classified/Non-Classified from parsed data
             if (dnfCheckbox && dnfCheckbox.checked) {
-                statuses[driverId] = 'DNF';
+                // Use parsed status if available, otherwise default to DNF
+                if (window.parsedRaceData && window.parsedRaceData.statuses && window.parsedRaceData.statuses[driverId]) {
+                    statuses[driverId] = window.parsedRaceData.statuses[driverId];
+                } else {
+                    statuses[driverId] = 'DNF'; // Default to Non-Classified if not specified
+                }
             } else if (dnsCheckbox && dnsCheckbox.checked) {
                 statuses[driverId] = 'DNS';
             }
+            
+            // Store time if available from parsed data
+            if (window.parsedRaceData && window.parsedRaceData.times && window.parsedRaceData.times[driverId]) {
+                times[driverId] = window.parsedRaceData.times[driverId];
+            }
+            
             hasResults = true;
         }
     }
@@ -1727,6 +1924,7 @@ function saveRaceResults() {
         date: currentRace.date,
         results: results,
         statuses: statuses,
+        times: times,
         pole: pole,
         id: existingRaceIndex >= 0 ? state.races[existingRaceIndex].id : Date.now()
     };
@@ -1793,13 +1991,16 @@ function calculateRaceScores(race) {
             const picks = generatePicksForRace('grojean', String(race.id));
             const userPicks = picks.filter(p => p.userId === user.id);
             userPicks.forEach(pick => {
-                const finish = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
-                if (finish === 'DNF') {
-                    grojeanPoints -= 1;
-                } else if (finish === 'DNS') {
+                const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
+                if (finishData === 'DNS') {
                     grojeanPoints += 0;
-                } else if (finish) {
-                    grojeanPoints += (21 - finish);
+                } else if (finishData === 'NC,DNF') {
+                    grojeanPoints -= 1; // Non-Classified DNF
+                } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
+                    // Classified DNF - treat as finishing in that position
+                    grojeanPoints += (21 - finishData.position);
+                } else if (finishData && typeof finishData === 'number') {
+                    grojeanPoints += (21 - finishData);
                 }
             });
         }
@@ -1810,13 +2011,16 @@ function calculateRaceScores(race) {
             const picks = generatePicksForRace('chilton', String(race.id));
             const userPicks = picks.filter(p => p.userId === user.id);
             userPicks.forEach(pick => {
-                const finish = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
-                if (finish === 'DNF') {
-                    chiltonPoints -= 1;
-                } else if (finish === 'DNS') {
+                const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
+                if (finishData === 'DNS') {
                     chiltonPoints += 0;
-                } else if (finish) {
-                    chiltonPoints += finish;
+                } else if (finishData === 'NC,DNF') {
+                    chiltonPoints -= 1; // Non-Classified DNF
+                } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
+                    // Classified DNF - treat as finishing in that position
+                    chiltonPoints += finishData.position;
+                } else if (finishData && typeof finishData === 'number') {
+                    chiltonPoints += finishData;
                 }
             });
         }
@@ -1869,16 +2073,26 @@ function getDriverFinishPosition(results, statuses, driverId) {
     // First check if driver finished in a valid position
     for (let pos = 1; pos <= 20; pos++) {
         if (results[pos] === driverId) {
-            // If flagged DNF/DNS, return the flag
-            if (statuses && statuses[driverId] === 'DNF') return 'DNF';
-            if (statuses && statuses[driverId] === 'DNS') return 'DNS';
+            const status = statuses && statuses[driverId];
+            // Handle Classified vs Non-Classified DNF
+            if (status === 'C,DNF') {
+                // Classified DNF - return position with status
+                return { position: pos, status: 'C,DNF' };
+            } else if (status === 'NC,DNF') {
+                // Non-Classified DNF - return flag
+                return 'NC,DNF';
+            } else if (status === 'DNS') {
+                return 'DNS';
+            }
+            // Normal finish
             return pos;
         }
     }
     
     // If driver has DNS/ DNF but no position assigned
-    if (statuses && statuses[driverId] === 'DNF') return 'DNF';
-    if (statuses && statuses[driverId] === 'DNS') return 'DNS';
+    const status = statuses && statuses[driverId];
+    if (status === 'NC,DNF' || status === 'DNF') return 'NC,DNF'; // Default to NC if not specified
+    if (status === 'DNS') return 'DNS';
     return null;
 }
 
@@ -2258,6 +2472,9 @@ function renderCalendar() {
             card.addEventListener('click', () => showRaceResults(race));
         }
         
+        // Always show Edit button for admins
+        const editBtn = isAdmin() ? `<button onclick="event.stopPropagation(); editRace(${race.id})" style="margin-top:10px;">✏️ Edit</button>` : '';
+        
         card.innerHTML = `
             <h3>${race.name}</h3>
             <p><strong>Date:</strong> ${new Date(race.date).toLocaleDateString()}</p>
@@ -2266,7 +2483,7 @@ function renderCalendar() {
                 ${statusText}
             </p>
             ${status === 'completed' ? '<p style="font-size:0.9rem;color:var(--text-secondary);margin-top:5px;">Click to view results</p>' : ''}
-            ${isAdmin() ? `<button onclick="event.stopPropagation(); editRace(${race.id})">Edit</button>` : ''}
+            ${editBtn}
         `;
         calendarList.appendChild(card);
     });
@@ -2531,13 +2748,27 @@ function renderRaceResultsPage() {
     const raceAdminOnly = document.getElementById('raceAdminOnly');
     const raceNonAdmin = document.getElementById('raceNonAdmin');
     const raceResultsForm = document.getElementById('raceResultsForm');
+    const racePasteSection = document.getElementById('racePasteSection');
+    const raceBanner = document.getElementById('raceBanner');
+    
+    // Get current race (most recently closed/completed)
+    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    const currentRace = completedRaces.length > 0 ? completedRaces[0] : getCurrentDraftRace();
     
     if (isAdmin()) {
         // Show admin controls
         if (raceAdminOnly) raceAdminOnly.style.setProperty('display', 'block', 'important');
         if (raceNonAdmin) raceNonAdmin.style.setProperty('display', 'none', 'important');
         
-        // Show form - always show current race form
+        // Show banner with current race
+        if (raceBanner && currentRace) {
+            raceBanner.innerHTML = `<div><strong>${currentRace.name}</strong> — Enter Race Results</div>`;
+        } else if (raceBanner) {
+            raceBanner.innerHTML = '<strong>No active race. Please add a race session in Calendar.</strong>';
+        }
+        
+        // Show paste section and form
+        if (racePasteSection) racePasteSection.style.display = 'block';
         if (raceResultsForm) raceResultsForm.style.display = 'block';
         renderRaceFormWithDupesPrevention();
     } else {
@@ -2547,31 +2778,66 @@ function renderRaceResultsPage() {
         
         // Show latest race results for viewing
         const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
-        if (latestRace && raceNonAdmin) {
-            let resultsHtml = `<h3>${latestRace.name} - Race Results</h3><div class="race-results-view" style="margin-top:15px;">`;
-            for (let pos = 1; pos <= 20; pos++) {
-                if (latestRace.results[pos]) {
-                    const driver = DRIVERS.find(d => d.id === latestRace.results[pos]);
-                    const status = latestRace.statuses[latestRace.results[pos]];
-                    if (driver) {
-                        resultsHtml += `<div style="padding:5px 0;"><strong>${pos}.</strong> ${driver.name} (${driver.team})${status ? ` - ${status}` : ''}</div>`;
-                    }
-                }
-            }
-            if (latestRace.pole) {
-                const poleDriver = DRIVERS.find(d => d.id === latestRace.pole);
-                if (poleDriver) {
-                    resultsHtml += `<div style="margin-top:15px;padding:10px;background:var(--bg-tertiary);border-radius:5px;"><strong>Pole Position:</strong> ${poleDriver.name} (${poleDriver.team})</div>`;
-                }
-            }
-            resultsHtml += '</div>';
-            raceNonAdmin.innerHTML = resultsHtml;
+        const raceResultsDisplay = document.getElementById('raceResultsDisplay');
+        const raceNoResults = document.getElementById('raceNoResults');
+        
+        if (latestRace) {
+            if (raceResultsDisplay) raceResultsDisplay.style.display = 'block';
+            if (raceNoResults) raceNoResults.style.display = 'none';
+            displayRaceResultsForPlayers(latestRace);
         } else {
-            raceNonAdmin.innerHTML = '<p>No race results posted yet.</p>';
+            if (raceResultsDisplay) raceResultsDisplay.style.display = 'none';
+            if (raceNoResults) raceNoResults.style.display = 'block';
         }
     }
     
     updateAdminControls();
+}
+
+// Display race results in table format for players
+function displayRaceResultsForPlayers(race) {
+    const raceResultsTitle = document.getElementById('raceResultsTitle');
+    const raceResultsTable = document.getElementById('raceResultsTable');
+    
+    if (!raceResultsTitle || !raceResultsTable) return;
+    
+    // Find race in calendar for date
+    const calRace = (state.raceCalendar || []).find(r => r.name === race.name);
+    const raceDate = calRace ? new Date(calRace.date).toLocaleDateString() : '';
+    
+    raceResultsTitle.textContent = `${race.name}${raceDate ? ` - ${raceDate}` : ''}`;
+    
+    // Build table
+    let tableHtml = '<table class="race-results-table" style="width:100%;margin-top:15px;border-collapse:collapse;">';
+    tableHtml += '<thead><tr><th style="padding:8px;border:1px solid var(--border-color);">Pos.</th><th style="padding:8px;border:1px solid var(--border-color);">Driver</th><th style="padding:8px;border:1px solid var(--border-color);">Time/Gap</th></tr></thead><tbody>';
+    
+    // Sort positions
+    const positions = Object.keys(race.results || {}).map(p => parseInt(p)).sort((a,b) => a - b);
+    
+    positions.forEach(pos => {
+        const driverId = race.results[pos];
+        const driver = DRIVERS.find(d => d.id === driverId);
+        const status = race.statuses && race.statuses[driverId];
+        const time = race.times && race.times[driverId] || '';
+        
+        if (driver) {
+            tableHtml += `<tr><td style="padding:8px;border:1px solid var(--border-color);text-align:center;">${pos}</td>`;
+            tableHtml += `<td style="padding:8px;border:1px solid var(--border-color);">${driver.name} (${driver.team})${status ? ` - ${status}` : ''}</td>`;
+            tableHtml += `<td style="padding:8px;border:1px solid var(--border-color);">${time}</td></tr>`;
+        }
+    });
+    
+    tableHtml += '</tbody></table>';
+    
+    // Add pole position
+    if (race.pole) {
+        const poleDriver = DRIVERS.find(d => d.id === race.pole);
+        if (poleDriver) {
+            tableHtml += `<div style="margin-top:20px;padding:15px;background:var(--bg-tertiary);border-radius:8px;"><strong>Pole Position:</strong> ${poleDriver.name} (${poleDriver.team})</div>`;
+        }
+    }
+    
+    raceResultsTable.innerHTML = tableHtml;
 }
 
 // Update race results with duplicate prevention
@@ -2775,24 +3041,36 @@ function showRaceResults(race) {
     let html = `<div class="race-results-modal" style="max-width:600px;margin:20px auto;padding:20px;background:var(--bg-secondary);border-radius:8px;">`;
     html += `<h2>${race.name} - Results</h2>`;
     
-    // Race Results (driver positions)
-    html += `<h3>Race Results</h3><div class="race-driver-results">`;
-    for (let pos = 1; pos <= 20; pos++) {
-        if (raceData.results[pos]) {
-            const driver = DRIVERS.find(d => d.id === raceData.results[pos]);
-            const status = raceData.statuses[raceData.results[pos]];
-            if (driver) {
-                html += `<div><strong>${pos}.</strong> ${driver.name} (${driver.team})${status ? ` - ${status}` : ''}</div>`;
-            }
+    // Race Results (driver positions) - Table format
+    html += `<h3>Race Results</h3>`;
+    html += `<table class="race-results-table" style="width:100%;margin-top:15px;border-collapse:collapse;">`;
+    html += `<thead><tr><th style="padding:8px;border:1px solid var(--border-color);">Pos.</th><th style="padding:8px;border:1px solid var(--border-color);">Driver</th><th style="padding:8px;border:1px solid var(--border-color);">Time/Gap</th></tr></thead><tbody>`;
+    
+    // Sort positions
+    const positions = Object.keys(raceData.results || {}).map(p => parseInt(p)).sort((a,b) => a - b);
+    
+    positions.forEach(pos => {
+        const driverId = raceData.results[pos];
+        const driver = DRIVERS.find(d => d.id === driverId);
+        const status = raceData.statuses && raceData.statuses[driverId];
+        const time = raceData.times && raceData.times[driverId] || '';
+        
+        if (driver) {
+            html += `<tr><td style="padding:8px;border:1px solid var(--border-color);text-align:center;">${pos}</td>`;
+            html += `<td style="padding:8px;border:1px solid var(--border-color);">${driver.name} (${driver.team})${status ? ` - ${status}` : ''}</td>`;
+            html += `<td style="padding:8px;border:1px solid var(--border-color);">${time}</td></tr>`;
         }
-    }
+    });
+    
+    html += `</tbody></table>`;
+    
+    // Pole Position
     if (raceData.pole) {
         const poleDriver = DRIVERS.find(d => d.id === raceData.pole);
         if (poleDriver) {
-            html += `<div style="margin-top:10px;"><strong>Pole:</strong> ${poleDriver.name} (${poleDriver.team})</div>`;
+            html += `<div style="margin-top:20px;padding:15px;background:var(--bg-tertiary);border-radius:8px;"><strong>Pole Position:</strong> ${poleDriver.name} (${poleDriver.team})</div>`;
         }
     }
-    html += `</div>`;
     
     // Draft Results (points per player in turn order)
     html += `<h3 style="margin-top:20px;">Draft Results</h3><div class="draft-results-list">`;
