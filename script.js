@@ -26,21 +26,40 @@ function generatePicksForRace(draftType, raceId) {
     const picks = [];
     const usedDrivers = new Set();
     
-    // Two rounds: normal order, then reverse (snake draft)
-    for (let round = 1; round <= 2; round++) {
-        const roundOrder = round === 2 ? [...order].reverse() : order;
-        roundOrder.forEach(user => {
-            const rankings = (state.userRankings && state.userRankings[draftType] && state.userRankings[draftType][user.id] && state.userRankings[draftType][user.id][raceIdStr]) ? state.userRankings[draftType][user.id][raceIdStr] : [];
-            const list = isChilton ? [...rankings].reverse() : rankings;
-            for (const driverId of list) {
-                if (!usedDrivers.has(driverId)) {
-                    picks.push({ userId: user.id, driverId, round, pickNumber: picks.length + 1 });
-                    usedDrivers.add(driverId);
-                    break;
-                }
+    // Single round: Each player gets ONE driver based on their rankings and turn order priority
+    // For First Place (grojean): Use rankings as-is (best first), normal turn order
+    //   - Player 1 (first in turn order) gets first pick, then Player 2, etc.
+    // For Last Place (chilton): Use rankings reversed (worst first), reversed turn order
+    //   - Last player in turn order gets first pick for Chilton, second-to-last gets second pick, etc.
+    // Note: Rankings are stored under 'grojean' for both draft types (players submit one ranking list)
+    // Works with any number of players (up to 20 players, 20 drivers)
+    order.forEach((user, index) => {
+        // Rankings are always stored under 'grojean' - players submit one ranking list
+        const rankings = (state.userRankings && state.userRankings.grojean && state.userRankings.grojean[user.id] && state.userRankings.grojean[user.id][raceIdStr]) 
+            ? state.userRankings.grojean[user.id][raceIdStr] 
+            : [];
+        
+        // For Chilton (Last Place), reverse rankings so worst drivers are checked first
+        // For Grojean (First Place), use rankings as-is (best first)
+        const list = isChilton ? [...rankings].reverse() : rankings;
+        
+        // Find first available driver from player's rankings
+        let assigned = false;
+        for (const driverId of list) {
+            if (!usedDrivers.has(driverId)) {
+                picks.push({ userId: user.id, driverId, round: 1, pickNumber: picks.length + 1 });
+                usedDrivers.add(driverId);
+                assigned = true;
+                break;
             }
-        });
-    }
+        }
+        
+        // If no driver was available (shouldn't happen with 20 drivers and <=20 players), log warning
+        if (!assigned) {
+            console.warn(`No available driver found for user ${user.id} in ${draftType} draft for race ${raceIdStr}`);
+        }
+    });
+    
     return picks;
 }
 // F1 Driver Data (2025 Season - Updated November 3, 2025)
@@ -2139,9 +2158,13 @@ function saveRaceResults() {
     }
     
     // Auto-rotate turn order after race completes
+    // This ensures fair rotation: Player 1 becomes last, Player 2 becomes Player 1, etc.
+    // After N races (where N = number of players), everyone will have had a turn at being Player 1
+    // Works with any number of players (up to 20)
     if (state.turnOrder && state.turnOrder.length > 1) {
-        const first = state.turnOrder.shift();
-        state.turnOrder.push(first);
+        const first = state.turnOrder.shift(); // Remove first player from front
+        state.turnOrder.push(first); // Add to end (becomes last in priority)
+        // Example: [1,2,3,4,5] → [2,3,4,5,1] (Player 1 now at end, Player 2 now first)
     }
 
     // Validate race ID before proceeding
