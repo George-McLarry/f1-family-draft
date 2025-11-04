@@ -408,16 +408,15 @@ function loadStateFromFirebase() {
             if (standingsTab && standingsTab.classList.contains('active')) {
                 updateStandings();
             }
-            // One-time draft reset for specific users (Lance, Joshua)
+            // One-time standings reset for specific users (Lance, Joshua)
             try {
-                if (!localStorage.getItem('draftReset_Lance_Joshua_v1')) {
-                    resetDraftPointsForUsers(['lance','joshua']);
-                    saveState();
-                    localStorage.setItem('draftReset_Lance_Joshua_v1', 'true');
-                    console.log('✅ Draft points reset for Lance and Joshua');
+                if (!localStorage.getItem('standingsReset_Lance_Joshua_v2')) {
+                    resetStandingsPointsForUsers(['lance','joshua']);
+                    localStorage.setItem('standingsReset_Lance_Joshua_v2', 'true');
+                    console.log('✅ All standings points reset to 0 for Lance and Joshua');
                 }
             } catch (e) {
-                console.warn('Draft reset skipped:', e);
+                console.warn('Standings reset skipped:', e);
             }
 
             renderCalendar();
@@ -1868,7 +1867,12 @@ function removePoleDriver(userId, raceId) {
     if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
     if (!state.bonusPicks.pole) state.bonusPicks.pole = {};
     if (!state.bonusPicks.pole[userId]) state.bonusPicks.pole[userId] = {};
-    delete state.bonusPicks.pole[userId][raceId];
+    const raceIdStr = String(raceId);
+    delete state.bonusPicks.pole[userId][raceIdStr];
+    // Also delete numeric key if it exists (cleanup)
+    if (typeof raceId === 'number') {
+        delete state.bonusPicks.pole[userId][raceId];
+    }
     saveState();
     renderPolePicksCurrent(state.raceCalendar.find(r => r.id === raceId));
 }
@@ -1975,11 +1979,63 @@ function submitBonuses() {
     try { updateDraftDisplay(); } catch (e) {}
     
     // Force refresh "Who Have I Got?" if it's visible to show updated pole pick
+    // But don't trigger the spoiler alert - just refresh the content silently
     const myDriversDisplay = document.getElementById('myDriversDisplay');
-    if (myDriversDisplay && myDriversDisplay.style.display !== 'none') {
-        setTimeout(() => {
-            showMyDriversForRace();
-        }, 100);
+    const myDriversContent = document.getElementById('myDriversContent');
+    if (myDriversDisplay && myDriversDisplay.style.display !== 'none' && myDriversContent) {
+        // Refresh content without showing spoiler alert
+        const raceIdStr = String(getCurrentDraftRace()?.id || '');
+        if (raceIdStr) {
+            // Get fresh data and update display directly without confirm dialog
+            const mostRecentCompleted = (state.raceCalendar || []).filter(r => {
+                const deadline = computeDeadlineTimestamp(r);
+                const deadlinePassed = deadline && deadline <= Date.now();
+                const statusCompleted = r.status === 'completed';
+                const isCompleted = deadlinePassed || statusCompleted;
+                if (!isCompleted) return false;
+                const rIdStr = String(r.id);
+                const hasResults = state.races && state.races.some(race => String(race.id) === rIdStr);
+                return !hasResults;
+            }).sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date))[0];
+            
+            if (mostRecentCompleted) {
+                const raceIdStr2 = String(mostRecentCompleted.id);
+                const currentUserIdStr = String(state.currentUser);
+                
+                const grojeanPicks = generatePicksForRace('grojean', raceIdStr2);
+                const myGrojeanPick = grojeanPicks.find(p => String(p.userId) === currentUserIdStr);
+                const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
+                
+                const chiltonPicks = generatePicksForRace('chilton', raceIdStr2);
+                const myChiltonPick = chiltonPicks.find(p => String(p.userId) === currentUserIdStr);
+                const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
+                
+                const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[state.currentUser] && state.bonusPicks.top5[state.currentUser][raceIdStr2] 
+                    ? state.bonusPicks.top5[state.currentUser][raceIdStr2] 
+                    : [];
+                const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
+                
+                const polePickObj = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] 
+                    ? state.bonusPicks.pole[state.currentUser] 
+                    : null;
+                const polePick = polePickObj ? (polePickObj[raceIdStr2] || polePickObj[mostRecentCompleted.id] || null) : null;
+                const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
+                
+                let html = `<div style="padding: 15px; background: var(--accent-primary); color: white; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+                    <h3 style="margin: 0;">Draft</h3>
+                    <p style="margin: 5px 0 0 0; font-size: 1.1rem; font-weight: bold;">${mostRecentCompleted.name}</p>
+                </div>`;
+                
+                html += '<div style="display: flex; flex-direction: column; gap: 15px;">';
+                html += `<div><strong>First Place:</strong> ${grojeanDriver ? grojeanDriver.name : 'Not Picked'}</div>`;
+                html += `<div><strong>Last Place:</strong> ${chiltonDriver ? chiltonDriver.name : 'Not Picked'}</div>`;
+                html += `<div><strong>Top 5:</strong> ${top5Drivers.length > 0 ? top5Drivers.map(d => d.name).join(', ') : 'Not Picked'}</div>`;
+                html += `<div><strong>Pole:</strong> ${poleDriver ? poleDriver.name : 'Not Picked'}</div>`;
+                html += '</div>';
+                
+                myDriversContent.innerHTML = html;
+            }
+        }
     }
 
     alert('Bonuses submitted for this race!');
@@ -2572,6 +2628,50 @@ function resetDraftPointsForUsers(usernames) {
             }
         });
     });
+}
+
+// Reset all standings points for specific users (for Lance and Joshua)
+function resetStandingsPointsForUsers(usernames) {
+    const targetNames = new Set((usernames || []).map(n => String(n).toLowerCase()));
+    const idSet = new Set(
+        (state.users || [])
+            .filter(u => u && u.username && targetNames.has(String(u.username).toLowerCase()))
+            .map(u => u.id)
+    );
+    if (idSet.size === 0) return;
+    
+    // Reset all standings for these users across all races
+    Object.keys(state.standings || {}).forEach(raceId => {
+        const raceStandings = state.standings[raceId];
+        if (!raceStandings) return;
+        Object.keys(raceStandings).forEach(uid => {
+            const numUid = isNaN(parseInt(uid,10)) ? uid : parseInt(uid,10);
+            if (idSet.has(numUid) || idSet.has(String(numUid))) {
+                raceStandings[uid] = {
+                    grojean: 0,
+                    chilton: 0,
+                    poleBonus: 0,
+                    top5Bonus: 0,
+                    total: 0
+                };
+            }
+        });
+    });
+    
+    // Also reset season adjustments if they exist
+    if (state.seasonAdjustments) {
+        Object.keys(state.seasonAdjustments).forEach(uid => {
+            const numUid = isNaN(parseInt(uid,10)) ? uid : parseInt(uid,10);
+            if (idSet.has(numUid) || idSet.has(String(numUid))) {
+                state.seasonAdjustments[uid] = 0;
+            }
+        });
+    }
+    
+    saveState();
+    if (checkFirebase()) saveStateToFirebase();
+    updateStandings();
+    updateStandingsDisplay();
 }
 
     // Standings
