@@ -574,6 +574,25 @@ function setupEventListeners() {
     if (parseRaceResultsBtn) {
         parseRaceResultsBtn.addEventListener('click', parseRaceResults);
     }
+    
+    const showResultsEditorBtn = document.getElementById('showResultsEditorBtn');
+    if (showResultsEditorBtn) {
+        showResultsEditorBtn.addEventListener('click', () => {
+            const editor = document.getElementById('raceResultsEditor');
+            if (editor) {
+                editor.style.display = editor.style.display === 'none' ? 'block' : 'none';
+                if (editor.style.display === 'block') {
+                    renderRaceFormWithDupesPrevention();
+                }
+            }
+        });
+    }
+    
+    // Rename save button to publish button
+    const publishRaceResultsBtn = document.getElementById('publishRaceResultsBtn');
+    if (publishRaceResultsBtn) {
+        publishRaceResultsBtn.addEventListener('click', saveRaceResults);
+    }
     // loadRaceBtn and loadDemoBtn removed - no longer needed
     
     // Standings
@@ -1960,8 +1979,15 @@ function saveRaceResults() {
     renderCalendar();
     updateDraftDisplay();
     renderBonusPicks();
-    renderRaceFormWithDupesPrevention(); // Refresh form
-    alert(`Race results saved: ${currentRace.name}. Next race is now open for drafting!`);
+    
+    // Hide editor and show published results
+    const raceResultsEditor = document.getElementById('raceResultsEditor');
+    if (raceResultsEditor) raceResultsEditor.style.display = 'none';
+    
+    // Refresh the race results page to show published results
+    renderRaceResultsPage();
+    
+    alert(`Race results published for ${currentRace.name}! Points have been calculated and standings updated. Next race is now open for drafting!`);
 }
 
 function calculateRaceScores(race) {
@@ -2747,48 +2773,48 @@ function saveRaceToCalendar() {
 function renderRaceResultsPage() {
     const raceAdminOnly = document.getElementById('raceAdminOnly');
     const raceNonAdmin = document.getElementById('raceNonAdmin');
-    const raceResultsForm = document.getElementById('raceResultsForm');
-    const racePasteSection = document.getElementById('racePasteSection');
+    const raceResultsEditor = document.getElementById('raceResultsEditor');
     const raceBanner = document.getElementById('raceBanner');
     
     // Get current race (most recently closed/completed)
     const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
     const currentRace = completedRaces.length > 0 ? completedRaces[0] : getCurrentDraftRace();
     
+    // Check if there are already published results
+    const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
+    const hasPublishedResults = latestRace && completedRaces.length > 0 && latestRace.name === completedRaces[0].name;
+    
+    // Show published results to everyone (admins and players)
+    const raceResultsDisplay = document.getElementById('raceResultsDisplay');
+    const raceNoResults = document.getElementById('raceNoResults');
+    
+    if (latestRace) {
+        if (raceResultsDisplay) raceResultsDisplay.style.display = 'block';
+        if (raceNoResults) raceNoResults.style.display = 'none';
+        displayRaceResultsForPlayers(latestRace);
+    } else {
+        if (raceResultsDisplay) raceResultsDisplay.style.display = 'none';
+        if (raceNoResults) raceNoResults.style.display = 'block';
+    }
+    
     if (isAdmin()) {
-        // Show admin controls
+        // Show admin controls (Results button)
         if (raceAdminOnly) raceAdminOnly.style.setProperty('display', 'block', 'important');
         if (raceNonAdmin) raceNonAdmin.style.setProperty('display', 'none', 'important');
         
         // Show banner with current race
         if (raceBanner && currentRace) {
-            raceBanner.innerHTML = `<div><strong>${currentRace.name}</strong> — Enter Race Results</div>`;
+            raceBanner.innerHTML = `<div><strong>${currentRace.name}</strong> — ${hasPublishedResults ? 'Results Published' : 'Enter Race Results'}</div>`;
         } else if (raceBanner) {
             raceBanner.innerHTML = '<strong>No active race. Please add a race session in Calendar.</strong>';
         }
         
-        // Show paste section and form
-        if (racePasteSection) racePasteSection.style.display = 'block';
-        if (raceResultsForm) raceResultsForm.style.display = 'block';
-        renderRaceFormWithDupesPrevention();
+        // Hide editor by default (show when Results button clicked)
+        if (raceResultsEditor) raceResultsEditor.style.display = 'none';
     } else {
         // Hide admin controls for non-admins
         if (raceAdminOnly) raceAdminOnly.style.setProperty('display', 'none', 'important');
         if (raceNonAdmin) raceNonAdmin.style.setProperty('display', 'block', 'important');
-        
-        // Show latest race results for viewing
-        const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
-        const raceResultsDisplay = document.getElementById('raceResultsDisplay');
-        const raceNoResults = document.getElementById('raceNoResults');
-        
-        if (latestRace) {
-            if (raceResultsDisplay) raceResultsDisplay.style.display = 'block';
-            if (raceNoResults) raceNoResults.style.display = 'none';
-            displayRaceResultsForPlayers(latestRace);
-        } else {
-            if (raceResultsDisplay) raceResultsDisplay.style.display = 'none';
-            if (raceNoResults) raceNoResults.style.display = 'block';
-        }
     }
     
     updateAdminControls();
