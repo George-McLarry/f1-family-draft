@@ -263,7 +263,11 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) { console.error('Error updating standings:', e); }
     
     try {
-        if (typeof updateAdminControls === 'function') updateAdminControls();
+        if (typeof updateAdminControls === 'function') {
+            updateAdminControls();
+            // Also call after a short delay to catch any async state loading
+            setTimeout(() => updateAdminControls(), 500);
+        }
     } catch (e) { console.error('Error updating admin controls:', e); }
 
     // Start draft window timer to auto-lock on deadlines
@@ -403,6 +407,7 @@ function loadStateFromFirebase() {
             updateDraftDisplay();
             renderBonusPicks();
             updateStandingsDisplay();
+            updateAdminControls(); // Ensure admin controls are correct after state load
             updateSyncStatus('synced');
         } else {
             updateSyncStatus('synced');
@@ -451,6 +456,7 @@ function loadStateFromFirebase() {
                 renderBonusPicks();
                 updateStandingsDisplay();
                 renderRaceResultsPage();
+                updateAdminControls(); // Ensure admin controls are correct after state load
                 updateSyncStatus('synced');
             }
         }, (error) => {
@@ -885,7 +891,7 @@ function submitDraft() {
     // Update banner immediately to show "Submitted!"
     updateDraftDisplay();
     
-    // Alert removed - banner already shows "Submitted ✅" status
+    alert('Draft submitted! Your ranking is saved for this race.');
 }
 
 // Draft window helpers
@@ -1600,24 +1606,90 @@ function renderPolePicksCurrent(currentRace) {
         renderBonusPicks();
     });
     
-    // Auto-scroll when dragging near top/bottom of page
-    poleDropZone.addEventListener('dragenter', (e) => {
-        const scrollInterval = setInterval(() => {
-            const scrollThreshold = 100;
-            const scrollSpeed = 10;
-            const mouseY = e.clientY;
-            const windowHeight = window.innerHeight;
-            
-            if (mouseY < scrollThreshold) {
-                window.scrollBy(0, -scrollSpeed);
-            } else if (mouseY > windowHeight - scrollThreshold) {
-                window.scrollBy(0, scrollSpeed);
-            }
-        }, 50);
+    // Auto-scroll when dragging - use document-level dragover listener for better tracking
+    let poleScrollInterval = null;
+    const startPoleScroll = () => {
+        if (!poleScrollInterval) {
+            poleScrollInterval = setInterval(() => {
+                const scrollThreshold = 150;
+                const scrollSpeed = 20;
+                const scrollY = window.scrollY || window.pageYOffset;
+                const viewportHeight = window.innerHeight;
+                const documentHeight = document.documentElement.scrollHeight;
+                
+                // Check if we can scroll up (near top of viewport)
+                if (scrollY > 0 && scrollY < scrollThreshold) {
+                    window.scrollBy(0, -scrollSpeed);
+                }
+                // Check if we can scroll down (near bottom of viewport)
+                else if (scrollY + viewportHeight < documentHeight - scrollThreshold) {
+                    window.scrollBy(0, scrollSpeed);
+                }
+            }, 50);
+        }
+    };
+    
+    const stopPoleScroll = () => {
+        if (poleScrollInterval) {
+            clearInterval(poleScrollInterval);
+            poleScrollInterval = null;
+        }
+    };
+    
+    poleDropZone.addEventListener('dragenter', startPoleScroll);
+    poleDropZone.addEventListener('dragleave', stopPoleScroll);
+    poleDropZone.addEventListener('drop', stopPoleScroll);
+    poleDropZone.addEventListener('dragend', stopPoleScroll);
+    
+    // Global drag tracking for auto-scroll - set up once per page load
+    if (!window.globalDragScrollSetup) {
+        window.globalDragScrollSetup = true;
+        let globalScrollInterval = null;
+        let isDragging = false;
+        let lastMouseY = 0;
         
-        poleDropZone.addEventListener('dragleave', () => clearInterval(scrollInterval), { once: true });
-        poleDropZone.addEventListener('drop', () => clearInterval(scrollInterval), { once: true });
-    });
+        document.addEventListener('dragstart', () => {
+            isDragging = true;
+        });
+        
+        document.addEventListener('dragover', (e) => {
+            if (isDragging) {
+                lastMouseY = e.clientY;
+                if (!globalScrollInterval) {
+                    globalScrollInterval = setInterval(() => {
+                        if (!isDragging) {
+                            clearInterval(globalScrollInterval);
+                            globalScrollInterval = null;
+                            return;
+                        }
+                        const scrollThreshold = 150;
+                        const scrollSpeed = 20;
+                        const viewportHeight = window.innerHeight;
+                        const documentHeight = document.documentElement.scrollHeight;
+                        const scrollY = window.scrollY || window.pageYOffset;
+                        
+                        // Use last known mouse position for scroll decision
+                        // Scroll up if mouse near top of viewport
+                        if (lastMouseY < scrollThreshold && scrollY > 0) {
+                            window.scrollBy(0, -scrollSpeed);
+                        }
+                        // Scroll down if mouse near bottom of viewport
+                        else if (lastMouseY > viewportHeight - scrollThreshold && scrollY + viewportHeight < documentHeight) {
+                            window.scrollBy(0, scrollSpeed);
+                        }
+                    }, 50);
+                }
+            }
+        });
+        
+        document.addEventListener('dragend', () => {
+            isDragging = false;
+            if (globalScrollInterval) {
+                clearInterval(globalScrollInterval);
+                globalScrollInterval = null;
+            }
+        });
+    }
     
     poleBox.appendChild(poleDropZone);
     
@@ -1724,24 +1796,40 @@ function renderTop5PicksCurrent(currentRace) {
             renderTop5PicksCurrent(currentRace);
         });
         
-        // Auto-scroll when dragging near top/bottom of page
-        zone.addEventListener('dragenter', (e) => {
-            const scrollInterval = setInterval(() => {
-                const scrollThreshold = 100;
-                const scrollSpeed = 10;
-                const mouseY = e.clientY;
-                const windowHeight = window.innerHeight;
-                
-                if (mouseY < scrollThreshold) {
-                    window.scrollBy(0, -scrollSpeed);
-                } else if (mouseY > windowHeight - scrollThreshold) {
-                    window.scrollBy(0, scrollSpeed);
-                }
-            }, 50);
-            
-            zone.addEventListener('dragleave', () => clearInterval(scrollInterval), { once: true });
-            zone.addEventListener('drop', () => clearInterval(scrollInterval), { once: true });
-        });
+        // Auto-scroll when dragging - use document-level dragover listener for better tracking
+        let top5ScrollInterval = null;
+        const startTop5Scroll = () => {
+            if (!top5ScrollInterval) {
+                top5ScrollInterval = setInterval(() => {
+                    const scrollThreshold = 150;
+                    const scrollSpeed = 20;
+                    const scrollY = window.scrollY || window.pageYOffset;
+                    const viewportHeight = window.innerHeight;
+                    const documentHeight = document.documentElement.scrollHeight;
+                    
+                    // Check if we can scroll up (near top of viewport)
+                    if (scrollY > 0 && scrollY < scrollThreshold) {
+                        window.scrollBy(0, -scrollSpeed);
+                    }
+                    // Check if we can scroll down (near bottom of viewport)
+                    else if (scrollY + viewportHeight < documentHeight - scrollThreshold) {
+                        window.scrollBy(0, scrollSpeed);
+                    }
+                }, 50);
+            }
+        };
+        
+        const stopTop5Scroll = () => {
+            if (top5ScrollInterval) {
+                clearInterval(top5ScrollInterval);
+                top5ScrollInterval = null;
+            }
+        };
+        
+        zone.addEventListener('dragenter', startTop5Scroll);
+        zone.addEventListener('dragleave', stopTop5Scroll);
+        zone.addEventListener('drop', stopTop5Scroll);
+        zone.addEventListener('dragend', stopTop5Scroll);
         
         top5Zones.appendChild(zone);
     }
@@ -3142,15 +3230,14 @@ function isAdmin(userId) {
 // Update admin controls visibility
 function updateAdminControls() {
     const isAdminUser = isAdmin();
-    console.log('updateAdminControls called - isAdmin:', isAdminUser, 'currentUser:', state.currentUser, 'users:', state.users.length);
     document.querySelectorAll('.admin-controls').forEach(el => {
         if (isAdminUser) {
             // Force show with !important to override CSS
             el.style.setProperty('display', 'block', 'important');
         } else {
+            // Force hide with !important
             el.style.setProperty('display', 'none', 'important');
         }
-        console.log('Admin control element:', el.id || el.className, 'display:', el.style.display);
     });
 }
 
@@ -3336,6 +3423,7 @@ function showRankingsInterface() {
                 rankings.splice(draggedIndex, 1);
                 rankings.splice(currentIndex, 0, draggedId);
                 
+                // Save draft order (but do NOT mark as submitted - user must click Submit Draft)
                 state.userRankings[draftType][state.currentUser][selectedRaceId] = rankings;
                 saveState();
                 showRankingsInterface(); // Refresh
@@ -4036,7 +4124,22 @@ function showMyDriversForRace() {
     }
     
     // Get the most recent completed race without results
-    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    // Force fresh calculation - don't cache results
+    const now = Date.now();
+    const completedRaces = (state.raceCalendar || []).filter(r => {
+        const deadline = computeDeadlineTimestamp(r);
+        const deadlinePassed = deadline && deadline <= now;
+        const statusCompleted = r.status === 'completed';
+        const isCompleted = deadlinePassed || statusCompleted;
+        
+        if (!isCompleted) return false;
+        
+        // Check if results are posted for this race
+        const raceIdStr = String(r.id);
+        const hasResults = state.races && state.races.some(race => String(race.id) === raceIdStr);
+        return !hasResults; // Return true if completed but no results
+    }).sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    
     const mostRecentCompleted = completedRaces.length > 0 ? completedRaces[0] : null;
     
     if (!mostRecentCompleted) {
@@ -4050,14 +4153,16 @@ function showMyDriversForRace() {
     
     if (!myDriversDisplay || !myDriversContent) return;
     
-    // Get Grojean pick
+    // Get Grojean pick - ensure fresh calculation by regenerating picks
+    // Clear any cached results and force recalculation
     const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
-    const myGrojeanPick = grojeanPicks.find(p => p.userId === state.currentUser);
+    const myGrojeanPick = grojeanPicks.find(p => String(p.userId) === String(state.currentUser));
     const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
     
     // Get Chilton pick (Last Place - automatically calculated from draft, not manually picked)
+    // Ensure fresh calculation
     const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
-    const myChiltonPick = chiltonPicks.find(p => p.userId === state.currentUser);
+    const myChiltonPick = chiltonPicks.find(p => String(p.userId) === String(state.currentUser));
     const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
     
     // Get Top 5 bonus picks
