@@ -1,11 +1,18 @@
 function generatePicksForRace(draftType, raceId) {
+    // Validate race ID and normalize to string
+    const raceIdStr = String(raceId);
+    if (!validateRaceId(raceId, 'generatePicksForRace')) {
+        console.warn(`Race ID ${raceIdStr} not in calendar for draft generation`);
+        return [];
+    }
+    
     const isChilton = draftType === 'chilton';
-    const submissionsForRace = (state.submissions && state.submissions.draft && state.submissions.draft[raceId]) ? state.submissions.draft[raceId] : {};
+    const submissionsForRace = (state.submissions && state.submissions.draft && state.submissions.draft[raceIdStr]) ? state.submissions.draft[raceIdStr] : {};
     const submittedUsers = state.users.filter(u => submissionsForRace[u.id]);
     // If no submissions, return empty
     if (submittedUsers.length === 0) return [];
     
-    // Use turn order (sorted by turnOrder array)
+    // Use turn order (sorted by turnOrder array) - ensures fair rotation
     const turnOrder = state.turnOrder || state.users.map(u => u.id);
     const order = submittedUsers.sort((a, b) => {
         const aIndex = turnOrder.indexOf(a.id);
@@ -16,10 +23,11 @@ function generatePicksForRace(draftType, raceId) {
     const picks = [];
     const usedDrivers = new Set();
     
+    // Two rounds: normal order, then reverse (snake draft)
     for (let round = 1; round <= 2; round++) {
         const roundOrder = round === 2 ? [...order].reverse() : order;
         roundOrder.forEach(user => {
-            const rankings = (state.userRankings && state.userRankings[draftType] && state.userRankings[draftType][user.id] && state.userRankings[draftType][user.id][raceId]) ? state.userRankings[draftType][user.id][raceId] : [];
+            const rankings = (state.userRankings && state.userRankings[draftType] && state.userRankings[draftType][user.id] && state.userRankings[draftType][user.id][raceIdStr]) ? state.userRankings[draftType][user.id][raceIdStr] : [];
             const list = isChilton ? [...rankings].reverse() : rankings;
             for (const driverId of list) {
                 if (!usedDrivers.has(driverId)) {
@@ -333,7 +341,7 @@ function loadStateFromFirebase() {
     
     updateSyncStatus('syncing');
     
-    // Load initial state
+    // Load initial state and set up real-time listener
     stateRef.once('value', (snapshot) => {
         const data = snapshot.val();
         if (data) {
@@ -349,6 +357,18 @@ function loadStateFromFirebase() {
             
             // Refresh UI after loading
             renderUsers();
+            
+            // Initialize standings if needed (all players start at 0)
+            state.users.forEach(user => {
+                if (!state.standings) state.standings = {};
+                // Initialize per-race standings as races are completed
+            });
+            
+            // Update standings graph if visible
+            const standingsTab = document.getElementById('standings-tab');
+            if (standingsTab && standingsTab.classList.contains('active')) {
+                updateStandings();
+            }
             renderCalendar();
             updateDraftDisplay();
             renderBonusPicks();
@@ -364,34 +384,50 @@ function loadStateFromFirebase() {
         loadStateFromLocalStorage();
     });
     
-    // Listen for real-time changes from other users
-    stateRef.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            state = { ...state, ...data };
-            // Ensure all data structures exist
-            if (!state.draftHistory) state.draftHistory = { grojean: {}, chilton: {} };
-            if (!state.userRankings) state.userRankings = { grojean: {}, chilton: {} };
-            if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
-            if (!state.races) state.races = [];
-            if (!state.raceCalendar) state.raceCalendar = [];
-            if (!state.standings) state.standings = {};
-            if (!state.history) state.history = [];
-            
-            // Refresh UI when data changes
-            renderUsers();
-            populateCurrentUserSelect();
-            detectCurrentUser();
-            renderCalendar();
-            updateDraftDisplay();
-            renderBonusPicks();
-            updateStandingsDisplay();
-            updateSyncStatus('synced');
-        }
-    }, (error) => {
-        console.error('Firebase listener error:', error);
-        updateSyncStatus('error');
-    });
+    // Listen for real-time changes from other users (AUTOMATIC PIPELINE)
+    // Only set up listener once (avoid duplicates)
+    if (!window.firebaseListenerSetup) {
+        window.firebaseListenerSetup = true;
+        stateRef.on('value', (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+                const oldStandings = JSON.stringify(state.standings);
+                state = { ...state, ...data };
+                // Ensure all data structures exist
+                if (!state.draftHistory) state.draftHistory = { grojean: {}, chilton: {} };
+                if (!state.userRankings) state.userRankings = { grojean: {}, chilton: {} };
+                if (!state.bonusPicks) state.bonusPicks = { pole: {}, top5: {} };
+                if (!state.races) state.races = [];
+                if (!state.raceCalendar) state.raceCalendar = [];
+                if (!state.standings) state.standings = {};
+                if (!state.history) state.history = [];
+                
+                // Check if standings changed (race results updated) - AUTOMATIC GRAPH UPDATE
+                const newStandings = JSON.stringify(state.standings);
+                if (oldStandings !== newStandings) {
+                    // Standings updated - refresh graph automatically
+                    const standingsTab = document.getElementById('standings-tab');
+                    if (standingsTab && standingsTab.classList.contains('active')) {
+                        updateStandings(); // This will trigger graph update via renderStandingsGraph
+                    }
+                }
+                
+                // Refresh UI components
+                renderUsers();
+                populateCurrentUserSelect();
+                detectCurrentUser();
+                renderCalendar();
+                updateDraftDisplay();
+                renderBonusPicks();
+                updateStandingsDisplay();
+                renderRaceResultsPage();
+                updateSyncStatus('synced');
+            }
+        }, (error) => {
+            console.error('Firebase listener error:', error);
+            updateSyncStatus('error');
+        });
+    }
 }
 
 // Save state to Firebase or localStorage
@@ -829,16 +865,31 @@ function submitDraft() {
 }
 
 // Draft window helpers
+// Validate race ID exists in calendar (runtime check)
+function validateRaceId(raceId, context = '') {
+    if (!raceId) return false;
+    const raceIdStr = String(raceId);
+    const exists = (state.raceCalendar || []).some(r => String(r.id) === raceIdStr);
+    if (!exists && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        console.warn(`[Race ID Validation] Race ID ${raceIdStr} not found in calendar${context ? ` (${context})` : ''}. This may cause data inconsistencies.`);
+    }
+    return exists;
+}
+
 function getCurrentDraftRace() {
     if (!Array.isArray(state.raceCalendar) || state.raceCalendar.length === 0) return null;
     // Current draftable race = status 'drafting'
     let drafting = state.raceCalendar.find(r => r.status === 'drafting');
-    if (drafting) return drafting;
+    if (drafting) {
+        validateRaceId(drafting.id, 'getCurrentDraftRace');
+        return drafting;
+    }
     
     // Auto-open next upcoming race if none is drafting (should always be one open)
-    const upcoming = state.raceCalendar.filter(r => (r.status === 'upcoming' || !r.status) && r.status !== 'completed').sort((a,b)=>new Date(a.date)-new Date(b.date));
+    const upcoming = state.raceCalendar.filter(r => (r.status === 'upcoming' || !r.status) && r.status !== 'completed').sort((a,b)=>new Date(a.date || a.deadlineDate)-new Date(b.date || b.deadlineDate));
     if (upcoming.length > 0) {
         upcoming[0].status = 'drafting';
+        validateRaceId(upcoming[0].id, 'getCurrentDraftRace - auto-open');
         saveState();
         return upcoming[0];
     }
@@ -2044,11 +2095,21 @@ function saveRaceResults() {
         state.turnOrder.push(first);
     }
 
-    // Calculate scores
+    // Validate race ID before proceeding
+    if (!validateRaceId(raceId, 'saveRaceResults')) {
+        console.error(`Race ID ${raceId} not found in calendar. Cannot save results.`);
+        alert('Error: Race not found in calendar. Please check the race ID.');
+        return;
+    }
+    
+    // Calculate scores - AUTOMATIC PIPELINE
     calculateRaceScores(raceData);
 
+    // Save state immediately after scoring
     saveState();
-    updateStandings();
+    
+    // Update UI components - AUTOMATIC REFRESH
+    updateStandings(); // This will trigger graph update via renderStandingsGraph
     renderCalendar();
     updateDraftDisplay();
     renderBonusPicks();
@@ -2060,15 +2121,39 @@ function saveRaceResults() {
     // Refresh the race results page to show published results
     renderRaceResultsPage();
     
+    // Real-time update: If on standings tab, force graph refresh
+    const standingsTab = document.getElementById('standings-tab');
+    if (standingsTab && standingsTab.classList.contains('active')) {
+        setTimeout(() => {
+            const sortedUsers = Object.values(state.users.reduce((acc, user) => {
+                acc[user.id] = {
+                    id: user.id,
+                    username: user.username,
+                    avatar: user.avatar
+                };
+                return acc;
+            }, {})).sort((a, b) => a.username.localeCompare(b.username));
+            renderStandingsGraph(sortedUsers);
+        }, 100);
+    }
+    
     alert(`Race results published for ${currentRace.name}! Points have been calculated and standings updated. Next race is now open for drafting!`);
 }
 
 function calculateRaceScores(race) {
-    if (!state.standings[race.id]) {
-        state.standings[race.id] = {};
+    // Validate race ID
+    const raceIdStr = String(race.id);
+    if (!validateRaceId(race.id, 'calculateRaceScores')) {
+        console.error(`Cannot calculate scores: Race ID ${raceIdStr} not in calendar`);
+        return;
+    }
+    
+    // Initialize standings for this race if needed
+    if (!state.standings[raceIdStr]) {
+        state.standings[raceIdStr] = {};
     }
 
-    const raceStandings = state.standings[race.id];
+    const raceStandings = state.standings[raceIdStr];
 
     state.users.forEach(user => {
         if (!raceStandings[user.id]) {
@@ -2213,13 +2298,15 @@ function updateStandings() {
     const filter = filterElement ? filterElement.value : 'all';
     const standingsTable = document.getElementById('standingsTable');
     
-    // Update race filter
+    // Update race filter - use calendar as single source of truth
     const raceFilter = document.getElementById('standingsRaceFilter');
     if (raceFilter) {
         raceFilter.innerHTML = '<option value="all">All Races</option>';
-        state.races.forEach(race => {
+        // Use calendar races instead of state.races for consistency
+        const calendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
+        calendarRaces.forEach(race => {
             const option = document.createElement('option');
-            option.value = race.id;
+            option.value = String(race.id);
             option.textContent = race.name;
             raceFilter.appendChild(option);
         });
@@ -2333,137 +2420,233 @@ function updateStandings() {
 
 function renderStandingsGraph(sortedUsers) {
     const graphContainer = document.getElementById('standingsGraph');
-    if (!graphContainer || state.races.length === 0) return;
+    if (!graphContainer) return;
     
-    // Calculate cumulative points per race
-    const raceOrder = state.races.sort((a, b) => new Date(a.date) - new Date(b.date));
-    const userSeries = {};
+    // Use calendar as single source of truth - includes all races (past, present, future)
+    const calendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
     
-    sortedUsers.forEach(user => {
-        userSeries[user.username] = [];
+    if (calendarRaces.length === 0) {
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No races in calendar yet. Add races to see standings graph.</p>';
+        return;
+    }
+    
+    // Destroy existing chart if it exists
+    if (window.standingsChart) {
+        window.standingsChart.destroy();
+        window.standingsChart = null;
+    }
+    
+    // Clear container
+    graphContainer.innerHTML = '<canvas id="standingsChartCanvas" aria-label="Cumulative points over season for all players" role="img"></canvas>';
+    const canvas = document.getElementById('standingsChartCanvas');
+    if (!canvas) return;
+    
+    // Calculate cumulative points per race for each player
+    const chartData = {
+        labels: calendarRaces.map(race => race.name),
+        datasets: []
+    };
+    
+    const colors = [
+        'rgb(225, 6, 0)',      // Red Bull red
+        'rgb(30, 65, 255)',    // Blue
+        'rgb(0, 168, 89)',     // Green
+        'rgb(255, 152, 0)',    // Orange
+        'rgb(156, 39, 176)',   // Purple
+        'rgb(0, 188, 212)',    // Cyan
+        'rgb(255, 87, 34)',    // Deep Orange
+        'rgb(121, 85, 72)',    // Brown
+        'rgb(96, 125, 139)',   // Blue Grey
+        'rgb(233, 30, 99)'     // Pink
+    ];
+    
+    sortedUsers.forEach((user, userIdx) => {
+        const userId = typeof user === 'object' ? user.id : state.users.find(u => u.username === user)?.id;
+        const username = typeof user === 'object' ? user.username : user;
+        const data = [];
         let cumulativeTotal = 0;
         
-        raceOrder.forEach(race => {
+        calendarRaces.forEach(race => {
             const raceIdStr = String(race.id);
             const raceStanding = state.standings[raceIdStr];
-            const userId = state.users.find(u => u.username === user.username)?.id;
             
+            // Add points earned in this race (if results exist)
             if (raceStanding && userId && raceStanding[userId]) {
                 cumulativeTotal += raceStanding[userId].total || 0;
             }
-            userSeries[user.username].push(cumulativeTotal);
+            
+            // For future races without results, use previous cumulative total (flat line)
+            data.push(cumulativeTotal);
+        });
+        
+        chartData.datasets.push({
+            label: `${user.avatar || ''} ${username}`,
+            data: data,
+            borderColor: colors[userIdx % colors.length],
+            backgroundColor: colors[userIdx % colors.length].replace('rgb', 'rgba').replace(')', ', 0.1)'),
+            borderWidth: 2.5,
+            fill: false,
+            tension: 0.4, // Smooth curves
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: colors[userIdx % colors.length],
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            pointHoverBackgroundColor: colors[userIdx % colors.length],
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 3
         });
     });
     
-    // Enhanced SVG graph with grid lines and zoom
-    const maxPoints = Math.max(...Object.values(userSeries).flat(), 1);
-    const colors = ['#e10600', '#1e41ff', '#00a859', '#ff9800', '#9c27b0', '#00bcd4', '#ff5722', '#795548', '#607d8b', '#e91e63'];
+    // Get computed CSS variables for Chart.js colors
+    const getComputedColor = (varName) => {
+        const style = getComputedStyle(document.documentElement);
+        return style.getPropertyValue(varName).trim() || '#000000';
+    };
     
-    // Zoom level (1 = normal, 2 = zoomed in, 0.5 = zoomed out)
-    const zoomLevel = window.graphZoomLevel || 1;
-    const viewBoxWidth = 800 * zoomLevel;
-    const viewBoxHeight = 400 * zoomLevel;
+    const textPrimary = getComputedColor('--text-primary');
+    const textSecondary = getComputedColor('--text-secondary');
+    const borderColor = getComputedColor('--border-color');
     
-    let svg = `<div style="position: relative; margin-bottom: 10px;">
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <button id="zoomInBtn" class="btn-secondary" style="padding: 5px 15px;">🔍 Zoom In</button>
-            <button id="zoomOutBtn" class="btn-secondary" style="padding: 5px 15px;">🔍 Zoom Out</button>
-            <button id="zoomResetBtn" class="btn-secondary" style="padding: 5px 15px;">Reset</button>
-        </div>
-        <svg id="standingsGraphSVG" viewBox="0 0 ${viewBoxWidth} ${viewBoxHeight}" style="width: 100%; height: ${400 * zoomLevel}px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
-        <text x="${viewBoxWidth/2}" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="var(--text-primary)">Cumulative Points Over Season</text>
-        
-        <!-- Grid lines (horizontal for points) -->
-        <defs>
-            <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
-                <path d="M 50 0 L 0 0 0 50" fill="none" stroke="var(--border-color)" stroke-width="0.5" opacity="0.3"/>
-            </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#grid)"/>
-        
-        <!-- Y-axis with point labels -->
-        <line x1="50" y1="350" x2="${viewBoxWidth - 50}" y2="350" stroke="var(--border-color)" stroke-width="2"/>
-        <line x1="50" y1="50" x2="50" y2="350" stroke="var(--border-color)" stroke-width="2"/>
-        
-        <!-- Horizontal grid lines for points -->
-        ${Array.from({length: 11}, (_, i) => {
-            const y = 350 - (i * 30);
-            const points = Math.round((i / 10) * maxPoints);
-            return `<line x1="50" y1="${y}" x2="${viewBoxWidth - 50}" y2="${y}" stroke="var(--border-color)" stroke-width="0.5" opacity="0.5" stroke-dasharray="2,2"/>
-                    <text x="45" y="${y + 4}" text-anchor="end" font-size="10" fill="var(--text-secondary)">${points}</text>`;
-        }).join('')}
-        
-        <!-- Vertical grid lines for races -->
-        ${raceOrder.map((race, idx) => {
-            const x = 50 + (idx * ((viewBoxWidth - 100) / (raceOrder.length - 1 || 1)));
-            return `<line x1="${x}" y1="50" x2="${x}" y2="350" stroke="var(--border-color)" stroke-width="0.5" opacity="0.5" stroke-dasharray="2,2"/>`;
-        }).join('')}
-    `;
-    
-    // Race labels on X-axis
-    raceOrder.forEach((race, idx) => {
-        const x = 50 + (idx * ((viewBoxWidth - 100) / (raceOrder.length - 1 || 1)));
-        svg += `<text x="${x}" y="${viewBoxHeight - 20}" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${race.name.length > 10 ? race.name.substring(0, 10) + '...' : race.name}</text>`;
+    // Create Chart.js line chart
+    const ctx = canvas.getContext('2d');
+    window.standingsChart = new Chart(ctx, {
+        type: 'line',
+        data: chartData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                title: {
+                    display: true,
+                    text: 'Cumulative Points Over Season',
+                    font: {
+                        size: 18,
+                        weight: '600'
+                    },
+                    color: textPrimary,
+                    padding: {
+                        top: 10,
+                        bottom: 20
+                    }
+                },
+                legend: {
+                    display: true,
+                    position: 'top',
+                    align: 'center',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 12
+                        },
+                        color: textPrimary,
+                        generateLabels: function(chart) {
+                            const original = Chart.defaults.plugins.legend.labels.generateLabels;
+                            const labels = original.call(this, chart);
+                            labels.forEach((label, idx) => {
+                                label.text = chartData.datasets[idx].label;
+                            });
+                            return labels;
+                        }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                    titleColor: '#fff',
+                    bodyColor: '#fff',
+                    borderColor: 'rgba(255, 255, 255, 0.2)',
+                    borderWidth: 1,
+                    padding: 12,
+                    displayColors: true,
+                    callbacks: {
+                        title: function(context) {
+                            return context[0].label;
+                        },
+                        label: function(context) {
+                            const datasetLabel = context.dataset.label || '';
+                            const currentValue = context.parsed.y;
+                            const previousValue = context.dataset.data[context.dataIndex - 1] || 0;
+                            const pointsThisRace = currentValue - previousValue;
+                            return [
+                                `${datasetLabel}`,
+                                `Total: ${currentValue} pts`,
+                                `This Race: ${pointsThisRace} pts`
+                            ];
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Race',
+                        color: textSecondary,
+                        font: {
+                            size: 12,
+                            weight: '500'
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.08)',
+                        drawBorder: true,
+                        borderColor: borderColor
+                    },
+                    ticks: {
+                        color: textSecondary,
+                        maxRotation: 45,
+                        minRotation: 45,
+                        font: {
+                            size: 10
+                        },
+                        callback: function(value, index) {
+                            const label = this.getLabelForValue(value);
+                            // Truncate long race names for readability
+                            return label.length > 15 ? label.substring(0, 12) + '...' : label;
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Cumulative Points',
+                        color: textSecondary,
+                        font: {
+                            size: 12,
+                            weight: '500'
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.08)',
+                        drawBorder: true,
+                        borderColor: borderColor
+                    },
+                    ticks: {
+                        color: textSecondary,
+                        precision: 0,
+                        font: {
+                            size: 11
+                        }
+                    }
+                }
+            },
+            animation: {
+                duration: 750,
+                easing: 'easeInOutQuart'
+            }
+        }
     });
     
-    // Draw lines for each user
-    Object.keys(userSeries).forEach((username, userIdx) => {
-        const series = userSeries[username];
-        const color = colors[userIdx % colors.length];
-        const points = series.map((point, idx) => {
-            const x = 50 + (idx * ((viewBoxWidth - 100) / (series.length - 1 || 1)));
-            const y = 350 - (point / maxPoints * 300);
-            return `${x},${y}`;
-        }).join(' ');
-        
-        svg += `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" opacity="0.8"/>`;
-        
-        // Add points
-        series.forEach((point, idx) => {
-            const x = 50 + (idx * ((viewBoxWidth - 100) / (series.length - 1 || 1)));
-            const y = 350 - (point / maxPoints * 300);
-            svg += `<circle cx="${x}" cy="${y}" r="5" fill="${color}" stroke="white" stroke-width="1"/>`;
-        });
-    });
-    
-    // Legend
-    let legendY = 60;
-    Object.keys(userSeries).forEach((username, userIdx) => {
-        const color = colors[userIdx % colors.length];
-        const user = sortedUsers.find(u => u.username === username);
-        svg += `<circle cx="${viewBoxWidth - 150}" cy="${legendY}" r="6" fill="${color}"/>
-                <text x="${viewBoxWidth - 135}" y="${legendY + 4}" font-size="12" fill="var(--text-primary)">${user?.avatar || ''} ${username}</text>`;
-        legendY += 20;
-    });
-    
-    svg += '</svg></div>';
-    graphContainer.innerHTML = svg;
-    
-    // Add zoom button listeners
-    const zoomInBtn = document.getElementById('zoomInBtn');
-    const zoomOutBtn = document.getElementById('zoomOutBtn');
-    const zoomResetBtn = document.getElementById('zoomResetBtn');
-    
-    if (zoomInBtn) {
-        zoomInBtn.addEventListener('click', () => {
-            window.graphZoomLevel = Math.min((window.graphZoomLevel || 1) * 1.5, 3);
-            renderStandingsGraph(sortedUsers);
-        });
-    }
-    
-    if (zoomOutBtn) {
-        zoomOutBtn.addEventListener('click', () => {
-            window.graphZoomLevel = Math.max((window.graphZoomLevel || 1) / 1.5, 0.5);
-            renderStandingsGraph(sortedUsers);
-        });
-    }
-    
-    if (zoomResetBtn) {
-        zoomResetBtn.addEventListener('click', () => {
-            window.graphZoomLevel = 1;
-            renderStandingsGraph(sortedUsers);
-        });
-    }
+    // Set canvas height for responsive design
+    canvas.style.height = '400px';
+    canvas.style.maxHeight = '80vh';
+    canvas.style.minHeight = '300px';
 }
 
 // CSV Export
@@ -2927,8 +3110,9 @@ function renderRaceResultsPage() {
     const currentRace = completedRaces.length > 0 ? completedRaces[0] : null;
     
     // Check if there are already published results for this completed race
-    const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
-    const hasPublishedResults = latestRace && currentRace && latestRace.name === currentRace.name;
+    // Use calendar race ID to find matching race results (calendar is single source of truth)
+    const latestRace = currentRace ? state.races.find(r => String(r.id) === String(currentRace.id)) : null;
+    const hasPublishedResults = latestRace && currentRace && String(latestRace.id) === String(currentRace.id);
     
     // Show published results with spoiler alert
     const raceResultsDisplay = document.getElementById('raceResultsDisplay');
@@ -3060,7 +3244,8 @@ function renderRaceFormWithDupesPrevention() {
     const selectedDrivers = new Set();
     
     // Load existing race data if available
-    const existingRace = state.races.find(r => r.name === currentRace.name);
+    // Use race ID (not name) for reliable matching - calendar is single source of truth
+    const existingRace = state.races.find(r => String(r.id) === String(currentRace.id));
     const existingResults = existingRace ? existingRace.results : {};
     const existingStatuses = existingRace ? existingRace.statuses : {};
     
@@ -3210,7 +3395,9 @@ function renderRaceFormWithDupesPrevention() {
 
 // Show race results modal when clicking completed race
 function showRaceResults(race) {
-    const raceData = state.races.find(r => r.name === race.name);
+    // Use race ID (not name) for reliable matching - calendar is single source of truth
+    const raceIdStr = String(race.id);
+    const raceData = state.races.find(r => String(r.id) === raceIdStr);
     if (!raceData) {
         alert('Race results not found for this race.');
         return;
@@ -3321,9 +3508,13 @@ function updateStandingsDisplay() {
     // Show latest race standings (no spoiler)
     const latestRaceStandings = document.getElementById('latestRaceStandings');
     if (latestRaceStandings) {
-        const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
-        if (latestRace && state.standings[latestRace.id]) {
-            const raceStandings = state.standings[latestRace.id];
+        // Find latest race by finding most recently completed race in calendar
+        const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+        const latestCalendarRace = completedRaces.length > 0 ? completedRaces[0] : null;
+        const latestRace = latestCalendarRace ? state.races.find(r => String(r.id) === String(latestCalendarRace.id)) : null;
+        const raceIdStr = latestRace ? String(latestRace.id) : null;
+        if (latestRace && raceIdStr && state.standings[raceIdStr]) {
+            const raceStandings = state.standings[raceIdStr];
             const sortedUsers = Object.entries(raceStandings)
                 .map(([userId, points]) => {
                     const user = state.users.find(u => u.id == userId);
