@@ -36,12 +36,12 @@
         <!-- Navigation Tabs -->
         <nav class="tabs" id="mainTabs">
             <button class="tab-btn active" data-tab="calendar">📅 Calendar</button>
-            <button class="tab-btn" data-tab="drivers">👥 Drivers</button>
             <button class="tab-btn" data-tab="users">Users</button>
             <button class="tab-btn" data-tab="draft">Draft</button>
             <button class="tab-btn" data-tab="bonuses">Bonus</button>
             <button class="tab-btn" data-tab="race">Results</button>
             <button class="tab-btn" data-tab="standings">Standings</button>
+            <button class="tab-btn" data-tab="logs">Logs</button>
         </nav>
 
         <!-- Calendar Tab -->
@@ -86,18 +86,6 @@
             </div>
         </section>
 
-        <!-- Drivers Tab -->
-        <section id="drivers-tab" class="tab-content">
-            <h2>2025 F1 Drivers</h2>
-            <div class="search-bar">
-                <input type="text" id="driverSearch" placeholder="Search drivers or teams...">
-                <select id="teamFilter">
-                    <option value="">All Teams</option>
-                </select>
-            </div>
-            <div id="driversList" class="drivers-grid"></div>
-        </section>
-
         <!-- Users Tab -->
         <section id="users-tab" class="tab-content">
             <h2>Users</h2>
@@ -127,8 +115,23 @@
             <div id="draftInfo" class="draft-info"></div>
             <div id="draftStatus" class="draft-status"></div>
             
-            <!-- Rankings Interface (always visible) -->
-            <div id="rankingsInterface" style="display: block;">
+            <!-- Race In Progress View (shown when race is completed but results not posted) -->
+            <div id="raceInProgressView" style="display: none;">
+                <div class="info-box" style="margin-bottom: 20px; text-align: center;">
+                    <h3 style="margin-bottom: 10px;">Race In Progress!</h3>
+                    <p id="raceInProgressName" style="font-size: 1.1rem; font-weight: bold;"></p>
+                </div>
+                <div style="text-align: center; margin: 20px 0;">
+                    <button id="showMyDriversBtn" class="btn-primary">See which driver you got!</button>
+                </div>
+                <div id="myDriversDisplay" style="display: none; margin-top: 20px; padding: 20px; background: var(--bg-secondary); border-radius: 8px;">
+                    <h4 style="margin-bottom: 15px;">Your Drivers for This Race:</h4>
+                    <div id="myDriversContent"></div>
+                </div>
+            </div>
+            
+            <!-- Rankings Interface (shown when drafting is open) -->
+            <div id="rankingsInterface" style="display: none;">
                 <h3>Rank Your Drivers</h3>
                 <p class="info-text">Drag drivers to order them. 1st = Best, 20th = Worst.</p>
                 <div id="rankingsList" class="rankings-list"></div>
@@ -241,6 +244,13 @@
                 <div id="standingsTable" class="standings-table"></div>
                 <div id="standingsGraph" class="standings-graph"></div>
             </div>
+        </section>
+
+        <!-- Logs Tab -->
+        <section id="logs-tab" class="tab-content">
+            <h2>Race Logs</h2>
+            <p class="info-text" style="margin-bottom: 20px;">View your historical race data, driver picks, and points earned.</p>
+            <div id="logsContent" class="logs-content"></div>
         </section>
     </div>
 

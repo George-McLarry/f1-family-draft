@@ -217,10 +217,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Render content (these can fail without breaking navigation)
     try {
-        if (typeof renderDrivers === 'function') renderDrivers();
-    } catch (e) { console.error('Error rendering drivers:', e); }
-    
-    try {
         if (typeof renderUsers === 'function') renderUsers();
     } catch (e) { console.error('Error rendering users:', e); }
     
@@ -417,7 +413,7 @@ function loadStateFromFirebase() {
                 populateCurrentUserSelect();
                 detectCurrentUser();
                 renderCalendar();
-                updateDraftDisplay();
+                updateDraftDisplay(); // Update draft display to show/hide Race In Progress view
                 renderBonusPicks();
                 updateStandingsDisplay();
                 renderRaceResultsPage();
@@ -525,8 +521,8 @@ function initializeUI() {
                 } else if (tabName === 'calendar' && typeof renderCalendar === 'function') {
                     renderCalendar();
                     updateAdminControls(); // Update admin controls when calendar tab is shown
-                } else if (tabName === 'drivers' && typeof renderDrivers === 'function') {
-                    renderDrivers();
+                } else if (tabName === 'logs' && typeof renderLogs === 'function') {
+                    renderLogs();
                 } else if (tabName === 'users' && typeof renderUsers === 'function') {
                     renderUsers();
                 }
@@ -571,17 +567,10 @@ function initializeUI() {
 
 // Event Listeners
 function setupEventListeners() {
-    // Driver search
-    const driverSearch = document.getElementById('driverSearch');
-    const teamFilter = document.getElementById('teamFilter');
-    if (driverSearch && teamFilter) {
-        driverSearch.addEventListener('input', (e) => {
-            filterDrivers(e.target.value, teamFilter.value);
-        });
-        
-        teamFilter.addEventListener('change', (e) => {
-            filterDrivers(driverSearch.value, e.target.value);
-        });
+    // Show My Drivers button (Race In Progress view)
+    const showMyDriversBtn = document.getElementById('showMyDriversBtn');
+    if (showMyDriversBtn) {
+        showMyDriversBtn.addEventListener('click', showMyDriversForRace);
     }
 
     // User management
@@ -947,47 +936,6 @@ function startDraftWindowTimer() {
     setInterval(updateDraftWindowStatus, 10000);
 }
 
-// Render Drivers
-function renderDrivers() {
-    const driversList = document.getElementById('driversList');
-    const teamFilter = document.getElementById('teamFilter');
-    
-    // Populate team filter
-    const teams = [...new Set(DRIVERS.map(d => d.team))].sort();
-    teamFilter.innerHTML = '<option value="">All Teams</option>';
-    teams.forEach(team => {
-        const option = document.createElement('option');
-        option.value = team;
-        option.textContent = team;
-        teamFilter.appendChild(option);
-    });
-
-    filterDrivers('', '');
-}
-
-function filterDrivers(search, team) {
-    const driversList = document.getElementById('driversList');
-    driversList.innerHTML = '';
-
-    const filtered = DRIVERS.filter(driver => {
-        const matchesSearch = !search || 
-            driver.name.toLowerCase().includes(search.toLowerCase()) ||
-            driver.team.toLowerCase().includes(search.toLowerCase());
-        const matchesTeam = !team || driver.team === team;
-        return matchesSearch && matchesTeam;
-    });
-
-    filtered.forEach(driver => {
-        const card = document.createElement('div');
-        card.className = 'driver-card';
-        card.innerHTML = `
-            <h3>${driver.name}</h3>
-            <div class="team">${driver.team}</div>
-        `;
-        driversList.appendChild(card);
-    });
-}
-
 // User Management
 function renderUsers() {
     const usersList = document.getElementById('usersList');
@@ -1251,6 +1199,46 @@ function updateDraftDisplay() {
     const draftQueue = document.getElementById('draftQueue');
     const availableDrivers = document.getElementById('availableDrivers');
     const draftPicks = document.getElementById('draftPicks');
+    const rankingsInterface = document.getElementById('rankingsInterface');
+    const raceInProgressView = document.getElementById('raceInProgressView');
+    
+    // Check if there's a completed race without results posted
+    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    const mostRecentCompleted = completedRaces.length > 0 ? completedRaces[0] : null;
+    
+    // Check if results are posted for the most recent completed race
+    let hasResults = false;
+    if (mostRecentCompleted) {
+        const raceIdStr = String(mostRecentCompleted.id);
+        hasResults = state.races && state.races.some(r => String(r.id) === raceIdStr);
+    }
+    
+    // If there's a completed race without results, show "Race In Progress" view
+    if (mostRecentCompleted && !hasResults) {
+        // Hide normal draft interface
+        if (rankingsInterface) rankingsInterface.style.display = 'none';
+        if (draftBanner) draftBanner.style.display = 'none';
+        
+        // Show Race In Progress view
+        if (raceInProgressView) {
+            raceInProgressView.style.display = 'block';
+            const raceNameEl = document.getElementById('raceInProgressName');
+            if (raceNameEl) raceNameEl.textContent = mostRecentCompleted.name;
+        }
+        
+        // Hide old draft status elements
+        if (draftStatus) draftStatus.innerHTML = '';
+        if (draftProgress) draftProgress.innerHTML = '';
+        if (draftQueue) draftQueue.innerHTML = '';
+        if (availableDrivers) availableDrivers.innerHTML = '';
+        if (draftPicks) draftPicks.innerHTML = '';
+        return;
+    }
+    
+    // Normal draft interface - hide Race In Progress view
+    if (raceInProgressView) raceInProgressView.style.display = 'none';
+    if (draftBanner) draftBanner.style.display = 'block';
+    
     const currentRace = getCurrentDraftRace();
     
     // draftInfo section removed (per user request)
@@ -1262,6 +1250,7 @@ function updateDraftDisplay() {
         if (draftQueue) draftQueue.innerHTML = '';
         if (availableDrivers) availableDrivers.innerHTML = '';
         if (draftPicks) draftPicks.innerHTML = '';
+        if (rankingsInterface) rankingsInterface.style.display = 'none';
         return;
     }
 
@@ -1282,8 +1271,7 @@ function updateDraftDisplay() {
         `;
     }
 
-    // Always render rankings list for current race
-    const rankingsInterface = document.getElementById('rankingsInterface');
+    // Show rankings list for current race
     if (rankingsInterface) {
         rankingsInterface.style.display = 'block';
         try { showRankingsInterface(); } catch(e) {}
@@ -2120,7 +2108,7 @@ function saveRaceResults() {
     // Update UI components - AUTOMATIC REFRESH
     updateStandings(); // This will trigger graph update via renderStandingsGraph
     renderCalendar();
-    updateDraftDisplay();
+    updateDraftDisplay(); // Update to hide Race In Progress view and show normal draft interface
     renderBonusPicks();
     
     // Hide editor and show published results
@@ -2628,6 +2616,11 @@ function renderStandingsGraph(sortedUsers) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            layout: {
+                padding: {
+                    bottom: window.innerWidth < 768 ? 35 : 40 // Extra padding for rotated labels, especially Season Start
+                }
+            },
             interaction: {
                 mode: 'index',
                 intersect: false
@@ -2770,6 +2763,8 @@ function renderStandingsGraph(sortedUsers) {
                         drawBorder: true,
                         borderColor: borderColor
                     },
+                    // Add extra padding at the bottom to ensure first label (Season Start) is visible
+                    offset: true,
                     ticks: {
                         color: textSecondary,
                         maxRotation: 45,
@@ -2777,11 +2772,13 @@ function renderStandingsGraph(sortedUsers) {
                         font: {
                             size: window.innerWidth < 768 ? 8 : 10
                         },
+                        padding: window.innerWidth < 768 ? 12 : 15, // Increased padding to prevent cutoff
                         callback: function(value, index) {
                             const label = this.getLabelForValue(value);
-                            // Special handling for Season Start label
+                            // Special handling for Season Start label - ensure it's always visible
                             if (index === 0 && label === 'Season Start') {
-                                return 'Start';
+                                // On mobile, show shorter version but ensure it's visible
+                                return window.innerWidth < 768 ? 'Start' : 'Season Start';
                             }
                             // Truncate long race names for readability on mobile
                             const maxLength = window.innerWidth < 768 ? 10 : 15;
@@ -3811,6 +3808,179 @@ function addTableSorting() {
     });
 }
 
+// Show My Drivers for Race In Progress
+function showMyDriversForRace() {
+    if (!state.currentUser) {
+        alert('Please sign in first using the header dropdown.');
+        return;
+    }
+    
+    // Get the most recent completed race without results
+    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    const mostRecentCompleted = completedRaces.length > 0 ? completedRaces[0] : null;
+    
+    if (!mostRecentCompleted) {
+        alert('No race in progress found.');
+        return;
+    }
+    
+    const raceIdStr = String(mostRecentCompleted.id);
+    const myDriversDisplay = document.getElementById('myDriversDisplay');
+    const myDriversContent = document.getElementById('myDriversContent');
+    
+    if (!myDriversDisplay || !myDriversContent) return;
+    
+    // Get Grojean pick
+    const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
+    const myGrojeanPick = grojeanPicks.find(p => p.userId === state.currentUser);
+    const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
+    
+    // Get Chilton pick
+    const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
+    const myChiltonPick = chiltonPicks.find(p => p.userId === state.currentUser);
+    const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
+    
+    // Get Top 5 picks
+    const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[state.currentUser] && state.bonusPicks.top5[state.currentUser][raceIdStr] 
+        ? state.bonusPicks.top5[state.currentUser][raceIdStr] 
+        : [];
+    const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
+    
+    // Get Pole pick
+    const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] && state.bonusPicks.pole[state.currentUser][raceIdStr]
+        ? state.bonusPicks.pole[state.currentUser][raceIdStr]
+        : null;
+    const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
+    
+    // Build display
+    let html = '<div style="display: flex; flex-direction: column; gap: 15px;">';
+    
+    html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
+        <strong>Grojean:</strong> ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
+    </div>`;
+    
+    html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
+        <strong>Chilton:</strong> ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
+    </div>`;
+    
+    html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
+        <strong>Top 5:</strong> ${top5Drivers.length > 0 ? top5Drivers.map((d, i) => `${i + 1}. ${d.name} (${d.team})`).join('<br>') : 'Not picked'}
+    </div>`;
+    
+    html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
+        <strong>Pole:</strong> ${poleDriver ? `${poleDriver.name} (${poleDriver.team})` : 'Not picked'}
+    </div>`;
+    
+    html += '</div>';
+    
+    myDriversContent.innerHTML = html;
+    myDriversDisplay.style.display = 'block';
+}
+
+// Render Logs Page
+function renderLogs() {
+    const logsContent = document.getElementById('logsContent');
+    if (!logsContent) return;
+    
+    if (!state.currentUser) {
+        logsContent.innerHTML = '<p class="info-text">Please sign in using the header dropdown to view your race logs.</p>';
+        return;
+    }
+    
+    const user = state.users.find(u => u.id === state.currentUser);
+    if (!user) {
+        logsContent.innerHTML = '<p class="info-text">User not found.</p>';
+        return;
+    }
+    
+    // Get all completed races with results (sorted chronologically)
+    const racesWithResults = (state.raceCalendar || [])
+        .filter(race => {
+            const raceIdStr = String(race.id);
+            return state.races && state.races.some(r => String(r.id) === raceIdStr);
+        })
+        .sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
+    
+    if (racesWithResults.length === 0) {
+        logsContent.innerHTML = '<p class="info-text">No race results available yet. Logs will appear here after races are completed and results are posted.</p>';
+        return;
+    }
+    
+    let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+    
+    // Render each race
+    racesWithResults.forEach(race => {
+        const raceIdStr = String(race.id);
+        const raceData = state.races.find(r => String(r.id) === raceIdStr);
+        const raceStandings = state.standings[raceIdStr];
+        const userStanding = raceStandings && raceStandings[state.currentUser];
+        
+        // Get picks for this race
+        const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
+        const myGrojeanPick = grojeanPicks.find(p => p.userId === state.currentUser);
+        const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
+        
+        const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
+        const myChiltonPick = chiltonPicks.find(p => p.userId === state.currentUser);
+        const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
+        
+        const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[state.currentUser] && state.bonusPicks.top5[state.currentUser][raceIdStr] 
+            ? state.bonusPicks.top5[state.currentUser][raceIdStr] 
+            : [];
+        const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
+        
+        const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] && state.bonusPicks.pole[state.currentUser][raceIdStr]
+            ? state.bonusPicks.pole[state.currentUser][raceIdStr]
+            : null;
+        const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
+        
+        const raceDate = new Date(race.date || race.deadlineDate).toLocaleDateString();
+        const points = userStanding ? userStanding.total : 0;
+        
+        html += `<div class="log-race-card" style="padding: 20px; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color);">
+            <h3 style="margin-bottom: 15px; color: var(--accent-primary);">${race.name}</h3>
+            <p style="margin-bottom: 15px; color: var(--text-secondary); font-size: 0.9rem;">${raceDate}</p>
+            
+            <div style="margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px;">Your Picks:</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
+                        <strong>Grojean:</strong><br>
+                        ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
+                    </div>
+                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
+                        <strong>Chilton:</strong><br>
+                        ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
+                    </div>
+                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
+                        <strong>Top 5:</strong><br>
+                        ${top5Drivers.length > 0 ? top5Drivers.map((d, i) => `${i + 1}. ${d.name}`).join('<br>') : 'Not picked'}
+                    </div>
+                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
+                        <strong>Pole:</strong><br>
+                        ${poleDriver ? `${poleDriver.name} (${poleDriver.team})` : 'Not picked'}
+                    </div>
+                </div>
+            </div>
+            
+            <div style="padding: 15px; background: var(--bg-tertiary); border-radius: 6px; text-align: center;">
+                <strong style="font-size: 1.2rem;">Points Earned: ${points}</strong>
+                ${userStanding ? `
+                    <div style="margin-top: 10px; font-size: 0.9rem; color: var(--text-secondary);">
+                        Grojean: ${userStanding.grojean || 0} | 
+                        Chilton: ${userStanding.chilton || 0} | 
+                        Pole Bonus: ${userStanding.poleBonus || 0} | 
+                        Top 5 Bonus: ${userStanding.top5Bonus || 0}
+                    </div>
+                ` : ''}
+            </div>
+        </div>`;
+    });
+    
+    html += '</div>';
+    logsContent.innerHTML = html;
+}
+
 window.showRaceResults = showRaceResults;
 window.isAdmin = isAdmin;
 window.makeAdmin = makeAdmin;
@@ -3824,6 +3994,7 @@ window.editRace = openRaceModal;
 window.showRaceResults = showRaceResults;
 window.isAdmin = isAdmin;
 window.makeAdmin = makeAdmin;
+window.showMyDriversForRace = showMyDriversForRace;
 
 
 

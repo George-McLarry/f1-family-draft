@@ -859,6 +859,7 @@ tr:hover {
 .standings-graph {
     margin-top: 20px;
     padding: 15px;
+    padding-bottom: 40px; /* Extra padding at bottom for rotated labels, especially Season Start */
     background: var(--bg-secondary);
     border-radius: 8px;
     min-height: 400px;
@@ -895,6 +896,7 @@ tr:hover {
 @media (max-width: 768px) {
     .standings-graph {
         padding: 10px;
+        padding-bottom: 45px; /* Extra padding at bottom for rotated labels on mobile */
         min-height: 350px;
     }
     
@@ -1129,6 +1131,19 @@ tr:hover {
 }
 
 /* Checkered Flag Pattern (for decoration) */
+.logs-content {
+    margin-top: 20px;
+}
+
+.log-race-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.log-race-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
 .checkered-bg {
     background-image: 
         linear-gradient(45deg, #000 25%, transparent 25%),
