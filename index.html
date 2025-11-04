@@ -173,10 +173,18 @@
                         <button id="parseRaceResultsBtn" class="btn-primary">Parse & Fill Results</button>
                         <div id="parseError" style="color:var(--error);margin-top:10px;display:none;"></div>
                     </div>
-                    <div id="raceResultsForm" class="race-results-form" style="margin-top: 20px;">
-                        <h3>Finishing Positions</h3>
-                        <p class="info-text">Select driver for each position. Once selected, driver is removed from other positions. Use checkboxes for DNF/DNS.</p>
-                        <div id="positionsGrid" class="positions-grid"></div>
+                    <div id="parsedResultsTableContainer" style="margin-top: 20px; display: none;">
+                        <table id="parsedResultsTable" class="race-results-table" style="width:100%;margin-top:15px;border-collapse:collapse;">
+                            <thead>
+                                <tr>
+                                    <th style="padding:8px;border:1px solid var(--border-color);cursor:pointer;">Pos.</th>
+                                    <th style="padding:8px;border:1px solid var(--border-color);cursor:pointer;">Driver</th>
+                                    <th style="padding:8px;border:1px solid var(--border-color);cursor:pointer;">Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="parsedResultsTableBody">
+                            </tbody>
+                        </table>
                         <div class="race-bonus-inputs" style="margin-top: 20px;">
                             <label>
                                 <strong>Pole Position:</strong>

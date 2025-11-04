@@ -582,7 +582,12 @@ function setupEventListeners() {
             if (editor) {
                 editor.style.display = editor.style.display === 'none' ? 'block' : 'none';
                 if (editor.style.display === 'block') {
-                    renderRaceFormWithDupesPrevention();
+                    // Initialize pole dropdown when editor opens
+                    const poleSelect = document.getElementById('poleResult');
+                    if (poleSelect) {
+                        poleSelect.innerHTML = '<option value="">Select Pole Position</option>' + 
+                            DRIVERS.map(d => `<option value="${d.id}">${d.name} (${d.team})</option>`).join('');
+                    }
                 }
             }
         });
@@ -1707,9 +1712,9 @@ function parseRaceResults() {
         return;
     }
     
-    const currentRace = getCurrentDraftRace();
+    // Get the most recently COMPLETED race (not the current "Drafting Open" one)
     const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
-    const targetRace = completedRaces.length > 0 ? completedRaces[0] : currentRace;
+    const targetRace = completedRaces.length > 0 ? completedRaces[0] : null;
     
     if (!targetRace) {
         if (parseError) {
@@ -1826,44 +1831,66 @@ function parseRaceResults() {
         return;
     }
     
-    // Fill in the form
-    Object.entries(results).forEach(([pos, driverId]) => {
-        const select = document.getElementById(`pos-${pos}`);
-        if (select) {
-            select.value = driverId;
-            // Trigger change to update other selects
-            select.dispatchEvent(new Event('change'));
+    // Populate the clean table
+    const tableContainer = document.getElementById('parsedResultsTableContainer');
+    const tableBody = document.getElementById('parsedResultsTableBody');
+    const poleSelect = document.getElementById('poleResult');
+    
+    if (!tableContainer || !tableBody) {
+        if (parseError) {
+            parseError.style.display = 'block';
+            parseError.textContent = 'Table elements not found.';
         }
+        return;
+    }
+    
+    // Clear existing table rows
+    tableBody.innerHTML = '';
+    
+    // Populate pole dropdown
+    if (poleSelect) {
+        poleSelect.innerHTML = '<option value="">Select Pole Position</option>' + 
+            DRIVERS.map(d => `<option value="${d.id}" ${pole === d.id ? 'selected' : ''}>${d.name} (${d.team})</option>`).join('');
+    }
+    
+    // Sort positions and populate table
+    const sortedPositions = Object.keys(results).map(p => parseInt(p)).sort((a,b) => a - b);
+    
+    sortedPositions.forEach(pos => {
+        const driverId = results[pos];
+        const driver = DRIVERS.find(d => d.id === driverId);
+        const time = times[driverId] || '';
+        const status = statuses[driverId] || '';
         
-        // Set DNF/DNS checkboxes
-        const status = statuses[driverId];
-        if (status) {
-            if (status.includes('DNF')) {
-                const dnfCheckbox = document.getElementById(`dnf-${pos}`);
-                if (dnfCheckbox) dnfCheckbox.checked = true;
-            }
-            if (status.includes('DNS')) {
-                const dnsCheckbox = document.getElementById(`dns-${pos}`);
-                if (dnsCheckbox) dnsCheckbox.checked = true;
-            }
+        if (driver) {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td style="padding:8px;border:1px solid var(--border-color);text-align:center;">${pos}</td>
+                <td style="padding:8px;border:1px solid var(--border-color);">${driver.name} (${driver.team})${status ? ` - ${status}` : ''}</td>
+                <td style="padding:8px;border:1px solid var(--border-color);">${time}</td>
+            `;
+            tableBody.appendChild(row);
         }
     });
     
-    // Set pole position
-    if (pole) {
-        const poleSelect = document.getElementById('poleResult');
-        if (poleSelect) {
-            poleSelect.value = pole;
-        }
-    }
-    
-    // Store times and classified status for saveRaceResults
+    // Store parsed data for publishing
     if (!window.parsedRaceData) window.parsedRaceData = {};
+    window.parsedRaceData.results = results;
     window.parsedRaceData.times = times;
     window.parsedRaceData.statuses = statuses;
     
+    // Show table container
+    tableContainer.style.display = 'block';
+    
+    // Set pole position if parsed
+    if (pole && poleSelect) {
+        poleSelect.value = pole;
+    }
+    
+    // Add sorting functionality to table headers
+    addTableSorting();
+    
     if (parseError) parseError.style.display = 'none';
-    alert(`Parsed ${Object.keys(results).length} drivers. Review and click "Save Race Results" to save.`);
 }
 
 function saveRaceResults() {
@@ -1872,58 +1899,71 @@ function saveRaceResults() {
         return;
     }
     
-    // Get the most recently completed race, or current draft race
+    // Get the most recently COMPLETED race (not the current "Drafting Open" one)
     const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
-    const currentRace = completedRaces.length > 0 ? completedRaces[0] : getCurrentDraftRace();
+    const currentRace = completedRaces.length > 0 ? completedRaces[0] : null;
     
     if (!currentRace) {
-        alert('No active race. Please add a race session in Calendar.');
+        alert('No completed race found. Please complete a race session in Calendar first.');
         return;
     }
 
+    // Get results from parsed data
     const results = {};
     const statuses = {};
     const times = {};
-    let hasResults = false;
-
-    for (let pos = 1; pos <= 20; pos++) {
-        const driverSelect = document.getElementById(`pos-${pos}`);
-        const dnfCheckbox = document.getElementById(`dnf-${pos}`);
-        const dnsCheckbox = document.getElementById(`dns-${pos}`);
-        
-        const driverVal = driverSelect ? driverSelect.value : '';
-        if (driverVal) {
-            const driverId = parseInt(driverVal);
-            // prevent duplicates
-            if (Object.values(results).includes(driverId)) {
-                alert('Duplicate driver detected in results. Please fix before saving.');
-                return;
-            }
-            results[pos] = driverId;
-            
-            // Check DNF/DNS checkboxes - preserve Classified/Non-Classified from parsed data
-            if (dnfCheckbox && dnfCheckbox.checked) {
-                // Use parsed status if available, otherwise default to DNF
-                if (window.parsedRaceData && window.parsedRaceData.statuses && window.parsedRaceData.statuses[driverId]) {
-                    statuses[driverId] = window.parsedRaceData.statuses[driverId];
-                } else {
-                    statuses[driverId] = 'DNF'; // Default to Non-Classified if not specified
+    
+    if (window.parsedRaceData && window.parsedRaceData.results) {
+        // Use parsed data from table
+        Object.assign(results, window.parsedRaceData.results);
+        Object.assign(statuses, window.parsedRaceData.statuses || {});
+        Object.assign(times, window.parsedRaceData.times || {});
+    } else {
+        // Fallback: read from table rows
+        const tableBody = document.getElementById('parsedResultsTableBody');
+        if (tableBody) {
+            const rows = tableBody.querySelectorAll('tr');
+            rows.forEach((row) => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length >= 3) {
+                    const pos = parseInt(cells[0].textContent.trim());
+                    const driverText = cells[1].textContent.trim();
+                    const time = cells[2].textContent.trim();
+                    
+                    // Extract driver name from "Driver Name (Team) - Status"
+                    const driverMatch = driverText.match(/^([^(]+)/);
+                    if (driverMatch) {
+                        const driverName = driverMatch[1].trim();
+                        const driver = DRIVERS.find(d => d.name === driverName);
+                        if (driver && !isNaN(pos)) {
+                            results[pos] = driver.id;
+                            times[driver.id] = time;
+                            
+                            // Check for status in driver text
+                            if (driverText.includes('C,DNF')) {
+                                statuses[driver.id] = 'C,DNF';
+                            } else if (driverText.includes('NC,DNF')) {
+                                statuses[driver.id] = 'NC,DNF';
+                            } else if (driverText.includes('DNS')) {
+                                statuses[driver.id] = 'DNS';
+                            }
+                        }
+                    }
                 }
-            } else if (dnsCheckbox && dnsCheckbox.checked) {
-                statuses[driverId] = 'DNS';
-            }
-            
-            // Store time if available from parsed data
-            if (window.parsedRaceData && window.parsedRaceData.times && window.parsedRaceData.times[driverId]) {
-                times[driverId] = window.parsedRaceData.times[driverId];
-            }
-            
-            hasResults = true;
+            });
         }
     }
 
-    if (!hasResults) {
-        alert('Please enter at least one race result');
+    if (Object.keys(results).length === 0) {
+        alert('Please parse race results first.');
+        return;
+    }
+    
+    // Validate no duplicate drivers
+    const driverIds = Object.values(results);
+    const uniqueDrivers = new Set(driverIds);
+    if (driverIds.length !== uniqueDrivers.size) {
+        alert('Duplicate driver detected in results. Please fix before publishing.');
         return;
     }
 
@@ -2776,13 +2816,13 @@ function renderRaceResultsPage() {
     const raceResultsEditor = document.getElementById('raceResultsEditor');
     const raceBanner = document.getElementById('raceBanner');
     
-    // Get current race (most recently closed/completed)
+    // Get the most recently COMPLETED race (not the current "Drafting Open" one)
     const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
-    const currentRace = completedRaces.length > 0 ? completedRaces[0] : getCurrentDraftRace();
+    const currentRace = completedRaces.length > 0 ? completedRaces[0] : null;
     
-    // Check if there are already published results
+    // Check if there are already published results for this completed race
     const latestRace = state.races.sort((a,b) => (b.id || 0) - (a.id || 0))[0];
-    const hasPublishedResults = latestRace && completedRaces.length > 0 && latestRace.name === completedRaces[0].name;
+    const hasPublishedResults = latestRace && currentRace && latestRace.name === currentRace.name;
     
     // Show published results to everyone (admins and players)
     const raceResultsDisplay = document.getElementById('raceResultsDisplay');
@@ -2802,11 +2842,11 @@ function renderRaceResultsPage() {
         if (raceAdminOnly) raceAdminOnly.style.setProperty('display', 'block', 'important');
         if (raceNonAdmin) raceNonAdmin.style.setProperty('display', 'none', 'important');
         
-        // Show banner with current race
+        // Show banner with most recently completed race
         if (raceBanner && currentRace) {
             raceBanner.innerHTML = `<div><strong>${currentRace.name}</strong> — ${hasPublishedResults ? 'Results Published' : 'Enter Race Results'}</div>`;
         } else if (raceBanner) {
-            raceBanner.innerHTML = '<strong>No active race. Please add a race session in Calendar.</strong>';
+            raceBanner.innerHTML = '<strong>No completed race found. Please complete a race session in Calendar first.</strong>';
         }
         
         // Hide editor by default (show when Results button clicked)
@@ -3187,11 +3227,65 @@ function updateStandingsDisplay() {
     } else {
         // Fallback to old updateStandings if new UI not available
         const standingsTable = document.getElementById('standingsTable');
-        if (standingsTable) {
-            updateStandings();
-        }
     }
 }
+
+// Add table sorting functionality
+function addTableSorting() {
+    const table = document.getElementById('parsedResultsTable');
+    if (!table) return;
+    
+    const headers = table.querySelectorAll('thead th');
+    headers.forEach((header, index) => {
+        // Remove existing listeners by cloning
+        const newHeader = header.cloneNode(true);
+        header.parentNode.replaceChild(newHeader, header);
+        
+        newHeader.addEventListener('click', () => {
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Determine sort direction
+            const isAscending = newHeader.dataset.sort === 'asc';
+            newHeader.dataset.sort = isAscending ? 'desc' : 'asc';
+            
+            // Clear sort indicators from all headers
+            headers.forEach(h => {
+                h.style.backgroundColor = '';
+                const text = h.textContent.replace(' ↑', '').replace(' ↓', '');
+                h.textContent = text;
+            });
+            
+            // Add sort indicator to current header
+            newHeader.style.backgroundColor = 'var(--bg-tertiary)';
+            const baseText = newHeader.textContent.replace(' ↑', '').replace(' ↓', '');
+            newHeader.textContent = baseText + (isAscending ? ' ↓' : ' ↑');
+            
+            // Sort rows
+            rows.sort((a, b) => {
+                const aText = a.cells[index].textContent.trim();
+                const bText = b.cells[index].textContent.trim();
+                
+                // For position column, sort numerically
+                if (index === 0) {
+                    const aNum = parseInt(aText);
+                    const bNum = parseInt(bText);
+                    return isAscending ? bNum - aNum : aNum - bNum;
+                }
+                
+                // For other columns, sort alphabetically
+                return isAscending ? bText.localeCompare(aText) : aText.localeCompare(bText);
+            });
+            
+            // Re-append sorted rows
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
+}
+
+window.showRaceResults = showRaceResults;
+window.isAdmin = isAdmin;
+window.makeAdmin = makeAdmin;
 
 // Make functions globally accessible
 window.deleteUser = deleteUser;
