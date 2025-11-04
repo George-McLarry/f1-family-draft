@@ -867,11 +867,19 @@ function submitDraft() {
 // Draft window helpers
 // Validate race ID exists in calendar (runtime check)
 function validateRaceId(raceId, context = '') {
-    if (!raceId) return false;
+    if (!raceId) {
+        console.error(`[Race ID Validation] Race ID is null or undefined${context ? ` (${context})` : ''}`);
+        return false;
+    }
     const raceIdStr = String(raceId);
     const exists = (state.raceCalendar || []).some(r => String(r.id) === raceIdStr);
-    if (!exists && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        console.warn(`[Race ID Validation] Race ID ${raceIdStr} not found in calendar${context ? ` (${context})` : ''}. This may cause data inconsistencies.`);
+    if (!exists) {
+        const errorMsg = `[Race ID Validation] Race ID ${raceIdStr} not found in calendar${context ? ` (${context})` : ''}. This may cause data inconsistencies.`;
+        console.error(errorMsg);
+        // In development, throw error to catch issues early
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            console.error('Available race IDs:', (state.raceCalendar || []).map(r => ({ id: r.id, name: r.name })));
+        }
     }
     return exists;
 }
@@ -2079,7 +2087,8 @@ function saveRaceResults() {
     }
 
     // Mark calendar entry completed; open next upcoming automatically
-    const calRace = (state.raceCalendar || []).find(r => r.name === currentRace.name);
+    // Use race ID instead of name for reliable matching
+    const calRace = (state.raceCalendar || []).find(r => String(r.id) === String(currentRace.id));
     if (calRace) {
         calRace.status = 'completed';
         // Open next upcoming
@@ -2424,15 +2433,42 @@ function renderStandingsGraph(sortedUsers) {
     if (!graphContainer) return;
     
     // Use calendar as single source of truth - show ALL races on timeline for context
-    const allCalendarRaces = (state.raceCalendar || []).sort((a, b) => new Date(a.date || a.deadlineDate) - new Date(b.date || b.deadlineDate));
+    // Runtime check: ensure calendar exists and has valid race IDs
+    if (!state.raceCalendar || !Array.isArray(state.raceCalendar)) {
+        console.error('[Standings Graph] Race calendar is not initialized');
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">Race calendar not initialized. Please add races to the calendar first.</p>';
+        return;
+    }
+    
+    const allCalendarRaces = state.raceCalendar.sort((a, b) => {
+        const dateA = new Date(a.date || a.deadlineDate);
+        const dateB = new Date(b.date || b.deadlineDate);
+        return dateA - dateB;
+    });
+    
+    // Validate all races have IDs
+    const racesWithoutIds = allCalendarRaces.filter(r => !r.id);
+    if (racesWithoutIds.length > 0) {
+        console.error('[Standings Graph] Found races without IDs:', racesWithoutIds.map(r => r.name));
+    }
     
     if (allCalendarRaces.length === 0) {
         graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No races in calendar yet. Add races to see standings graph.</p>';
         return;
     }
     
+    // Find completed races (races with standings data)
+    const completedRaces = allCalendarRaces.filter(race => {
+        const raceIdStr = String(race.id);
+        return state.standings[raceIdStr] && Object.keys(state.standings[raceIdStr]).length > 0;
+    });
+    
+    if (completedRaces.length === 0) {
+        graphContainer.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No race results published yet. Publish race results to see standings graph.</p>';
+        return;
+    }
+    
     // Find the last completed race - lines will stop here
-    const completedRaces = allCalendarRaces.filter(r => r.status === 'completed');
     const lastCompletedRace = completedRaces.length > 0 
         ? completedRaces.sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date))[0]
         : null;
@@ -2449,13 +2485,13 @@ function renderStandingsGraph(sortedUsers) {
     if (!canvas) return;
     
     // Timeline shows ALL races from calendar (for context)
-    // But lines only extend to the last completed race
+    // But data points only exist for completed races
     const chartData = {
         labels: allCalendarRaces.map(race => race.name),
         datasets: []
     };
     
-    // Find the index of the last completed race in the timeline
+    // Find the index of the last completed race in the full timeline
     const lastCompletedIndex = lastCompletedRace 
         ? allCalendarRaces.findIndex(r => String(r.id) === String(lastCompletedRace.id))
         : -1;
@@ -2482,34 +2518,51 @@ function renderStandingsGraph(sortedUsers) {
         let cumulativeTotal = 0;
         
         // Calculate cumulative points for each race in chronological order
-        // Show ALL races on timeline, but lines only extend to last completed race
+        // Everyone starts at 0 (bottom left corner) - cumulativeTotal begins at 0
+        // Show ALL races on timeline, but only plot data for completed races
+        // For each race: if standings exist, add those points to cumulative; otherwise keep previous total
+        // This ensures: Race 1 with 10 pts → shows 10; Race 2 with 5 pts → shows 15 (cumulative)
         allCalendarRaces.forEach((race, index) => {
             const raceIdStr = String(race.id);
-            const raceStanding = state.standings[raceIdStr];
-            
-            // Add points earned in this race (if results exist and race is completed)
-            // This matches exactly how updateStandings() sums: userTotals[userId].total += points.total
-            if (raceStanding && userId && raceStanding[userId] && index <= lastCompletedIndex) {
-                const pointsThisRace = raceStanding[userId].total || 0;
-                cumulativeTotal += pointsThisRace;
+            // Validate race ID exists in calendar
+            if (!validateRaceId(race.id, `renderStandingsGraph - race at index ${index}`)) {
+                console.warn(`Skipping invalid race ID in graph: ${raceIdStr}`);
+                data.push(null);
+                return;
             }
             
-            // For races after the last completed one, keep the same cumulative total (flat line)
-            // This way the timeline shows all races, but lines stop at the current progress
-            data.push(cumulativeTotal);
+            const raceStanding = state.standings[raceIdStr];
+            
+            // For completed races (with standings data), add points earned this race
+            if (raceStanding && userId && raceStanding[userId] && index <= lastCompletedIndex) {
+                const pointsThisRace = raceStanding[userId].total || 0;
+                // Add points from this race to cumulative total
+                cumulativeTotal += pointsThisRace;
+                // Push the cumulative total after this race
+                data.push(cumulativeTotal);
+            } else if (index <= lastCompletedIndex) {
+                // Race is before or at last completed, but no standings for this user
+                // Keep previous cumulative total (starts at 0, stays at 0 until first race with points)
+                data.push(cumulativeTotal);
+            } else {
+                // Future races (after last completed) - use null to break the line
+                data.push(null);
+            }
+        });
+        
+        // Store race-by-race points for tooltip calculation
+        user._racePoints = allCalendarRaces.map((race, index) => {
+            if (index > lastCompletedIndex) return null;
+            const raceIdStr = String(race.id);
+            const raceStanding = state.standings[raceIdStr];
+            if (raceStanding && userId && raceStanding[userId]) {
+                return raceStanding[userId].total || 0;
+            }
+            return 0;
         });
         
         // Verify: The final cumulative total should match the table total
-        // This ensures graph and table show the same final values
         const tableTotal = user.total;
-        
-        // Make points after last completed race smaller/invisible to show where progress stops
-        const pointRadii = data.map((value, index) => {
-            return index <= lastCompletedIndex ? 4 : 2; // Smaller points for future races
-        });
-        const pointHoverRadii = data.map((value, index) => {
-            return index <= lastCompletedIndex ? 6 : 0; // No hover for future races
-        });
         
         chartData.datasets.push({
             label: `${user.avatar || ''} ${username} (${tableTotal} pts)`,
@@ -2519,18 +2572,20 @@ function renderStandingsGraph(sortedUsers) {
             borderWidth: 2.5,
             fill: false,
             tension: 0.4, // Smooth curves
-            pointRadius: pointRadii,
-            pointHoverRadius: pointHoverRadii,
+            spanGaps: false, // Don't draw lines across null values (future races)
+            pointRadius: function(context) {
+                // Show points only for completed races (non-null data)
+                return context.parsed.y !== null ? 4 : 0;
+            },
+            pointHoverRadius: function(context) {
+                return context.parsed.y !== null ? 6 : 0;
+            },
             pointBackgroundColor: colors[userIdx % colors.length],
             pointBorderColor: '#fff',
             pointBorderWidth: 2,
             pointHoverBackgroundColor: colors[userIdx % colors.length],
             pointHoverBorderColor: '#fff',
-            pointHoverBorderWidth: 3,
-            // Show where progress stops - make line after last completed race more subtle
-            borderDash: data.map((value, index) => {
-                return index > lastCompletedIndex ? [5, 5] : [];
-            })
+            pointHoverBorderWidth: 3
         });
     });
     
@@ -2619,17 +2674,33 @@ function renderStandingsGraph(sortedUsers) {
                     displayColors: true,
                     callbacks: {
                         title: function(context) {
+                            // Return race name
                             return context[0].label;
                         },
                         label: function(context) {
-                            const datasetLabel = context.dataset.label || '';
+                            const datasetIndex = context.datasetIndex;
+                            const dataIndex = context.dataIndex;
+                            const user = sortedUsers[datasetIndex];
                             const currentValue = context.parsed.y;
-                            const previousValue = context.dataset.data[context.dataIndex - 1] || 0;
-                            const pointsThisRace = currentValue - previousValue;
+                            const previousValue = context.dataIndex > 0 ? context.dataset.data[context.dataIndex - 1] : 0;
+                            
+                            // Calculate points this race more accurately
+                            let pointsThisRace = 0;
+                            if (user._racePoints && user._racePoints[dataIndex] !== null && user._racePoints[dataIndex] !== undefined) {
+                                pointsThisRace = user._racePoints[dataIndex];
+                            } else {
+                                // Fallback calculation
+                                pointsThisRace = currentValue - (previousValue || 0);
+                            }
+                            
+                            // Extract player name from label (remove points suffix)
+                            const playerName = user.username || context.dataset.label.split(' (')[0].replace(/^[🏎️🏁🏆🥇🔥⚡💨🎯🚗🏴]*\s*/, '');
+                            
                             return [
-                                `${datasetLabel}`,
-                                `Total: ${currentValue} pts`,
-                                `This Race: ${pointsThisRace} pts`
+                                `Player: ${playerName}`,
+                                `Race: ${context[0].label}`,
+                                `Points Earned This Race: ${pointsThisRace}`,
+                                `Total Points: ${currentValue || 0}`
                             ];
                         }
                     }
@@ -3288,9 +3359,10 @@ function displayRaceResultsForPlayers(race) {
     
     if (!raceResultsTitle || !raceResultsTable) return;
     
-    // Find race in calendar for date
-    const calRace = (state.raceCalendar || []).find(r => r.name === race.name);
-    const raceDate = calRace ? new Date(calRace.date).toLocaleDateString() : '';
+    // Find race in calendar for date - use race ID for reliable matching
+    const raceIdStr = String(race.id);
+    const calRace = (state.raceCalendar || []).find(r => String(r.id) === raceIdStr);
+    const raceDate = calRace ? new Date(calRace.date || calRace.deadlineDate).toLocaleDateString() : '';
     
     raceResultsTitle.textContent = `${race.name}${raceDate ? ` - ${raceDate}` : ''}`;
     
