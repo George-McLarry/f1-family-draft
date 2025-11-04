@@ -1218,19 +1218,27 @@ function updateDraftDisplay() {
     const rankingsInterface = document.getElementById('rankingsInterface');
     const raceInProgressView = document.getElementById('raceInProgressView');
     
-    // Check if there's a completed race without results posted
-    const completedRaces = (state.raceCalendar || []).filter(r => r.status === 'completed').sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    // Check if there's a completed race without results (works for ALL races, not just first)
+    // A race is "completed" if its deadline has passed OR status is 'completed', AND it has no results posted
+    const now = Date.now();
+    const completedRaces = (state.raceCalendar || []).filter(r => {
+        const deadline = computeDeadlineTimestamp(r);
+        const deadlinePassed = deadline && deadline <= now;
+        const statusCompleted = r.status === 'completed';
+        const isCompleted = deadlinePassed || statusCompleted;
+        
+        if (!isCompleted) return false;
+        
+        // Check if results are posted for this race
+        const raceIdStr = String(r.id);
+        const hasResults = state.races && state.races.some(race => String(race.id) === raceIdStr);
+        return !hasResults; // Return true if completed but no results
+    }).sort((a,b) => new Date(b.deadlineDate || b.date) - new Date(a.deadlineDate || a.date));
+    
     const mostRecentCompleted = completedRaces.length > 0 ? completedRaces[0] : null;
     
-    // Check if results are posted for the most recent completed race
-    let hasResults = false;
-    if (mostRecentCompleted) {
-        const raceIdStr = String(mostRecentCompleted.id);
-        hasResults = state.races && state.races.some(r => String(r.id) === raceIdStr);
-    }
-    
     // If there's a completed race without results, show "Race In Progress" view
-    if (mostRecentCompleted && !hasResults) {
+    if (mostRecentCompleted) {
         // Hide normal draft interface
         if (rankingsInterface) rankingsInterface.style.display = 'none';
         if (draftBanner) draftBanner.style.display = 'none';
@@ -3922,25 +3930,30 @@ function showMyDriversForRace() {
     const myGrojeanPick = grojeanPicks.find(p => p.userId === state.currentUser);
     const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
     
-    // Get Chilton pick
+    // Get Chilton pick (Last Place - automatically calculated from draft, not manually picked)
     const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
     const myChiltonPick = chiltonPicks.find(p => p.userId === state.currentUser);
     const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
     
-    // Get Top 5 picks
+    // Get Top 5 bonus picks
     const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[state.currentUser] && state.bonusPicks.top5[state.currentUser][raceIdStr] 
         ? state.bonusPicks.top5[state.currentUser][raceIdStr] 
         : [];
     const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
     
-    // Get Pole pick
+    // Get Pole bonus pick
     const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] && state.bonusPicks.pole[state.currentUser][raceIdStr]
         ? state.bonusPicks.pole[state.currentUser][raceIdStr]
         : null;
     const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
     
-    // Build display
-    let html = '<div style="display: flex; flex-direction: column; gap: 15px;">';
+    // Build display with banner showing race name
+    let html = `<div style="padding: 15px; background: var(--accent-primary); color: white; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+        <h3 style="margin: 0;">Draft</h3>
+        <p style="margin: 5px 0 0 0; font-size: 1.1rem; font-weight: bold;">${mostRecentCompleted.name}</p>
+    </div>`;
+    
+    html += '<div style="display: flex; flex-direction: column; gap: 15px;">';
     
     html += `<div style="padding: 15px; background: var(--bg-tertiary); border-radius: 8px;">
         <strong>First place:</strong> ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
