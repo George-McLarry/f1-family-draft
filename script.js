@@ -2484,17 +2484,18 @@ function renderStandingsGraph(sortedUsers) {
     const canvas = document.getElementById('standingsChartCanvas');
     if (!canvas) return;
     
-    // Timeline shows ALL races from calendar (for context)
-    // But data points only exist for completed races
+    // Timeline shows "Season Start" first, then ALL races from calendar
+    // Season Start shows all players at 0 points
     const chartData = {
-        labels: allCalendarRaces.map(race => race.name),
+        labels: ['Season Start', ...allCalendarRaces.map(race => race.name)],
         datasets: []
     };
     
     // Find the index of the last completed race in the full timeline
+    // Note: Add 1 to account for "Season Start" at index 0
     const lastCompletedIndex = lastCompletedRace 
-        ? allCalendarRaces.findIndex(r => String(r.id) === String(lastCompletedRace.id))
-        : -1;
+        ? allCalendarRaces.findIndex(r => String(r.id) === String(lastCompletedRace.id)) + 1 // +1 for Season Start
+        : 0; // 0 means only Season Start is shown (no races completed yet)
     
     const colors = [
         'rgb(225, 6, 0)',      // Red Bull red
@@ -2517,11 +2518,14 @@ function renderStandingsGraph(sortedUsers) {
         const data = [];
         let cumulativeTotal = 0;
         
+        // Season Start: All players begin at 0 points
+        data.push(0);
+        
         // Calculate cumulative points for each race in chronological order
-        // Everyone starts at 0 (bottom left corner) - cumulativeTotal begins at 0
+        // Everyone starts at 0 at "Season Start", then accumulates points race by race
         // Show ALL races on timeline, but only plot data for completed races
         // For each race: if standings exist, add those points to cumulative; otherwise keep previous total
-        // This ensures: Race 1 with 10 pts → shows 10; Race 2 with 5 pts → shows 15 (cumulative)
+        // This ensures: Season Start → 0; Race 1 with 10 pts → shows 10; Race 2 with 5 pts → shows 15 (cumulative)
         allCalendarRaces.forEach((race, index) => {
             const raceIdStr = String(race.id);
             // Validate race ID exists in calendar
@@ -2534,15 +2538,17 @@ function renderStandingsGraph(sortedUsers) {
             const raceStanding = state.standings[raceIdStr];
             
             // For completed races (with standings data), add points earned this race
-            if (raceStanding && userId && raceStanding[userId] && index <= lastCompletedIndex) {
+            // Note: lastCompletedIndex now includes Season Start offset, so we compare with index+1
+            const raceIndexInChart = index + 1; // +1 because Season Start is at index 0
+            if (raceStanding && userId && raceStanding[userId] && raceIndexInChart <= lastCompletedIndex) {
                 const pointsThisRace = raceStanding[userId].total || 0;
                 // Add points from this race to cumulative total
                 cumulativeTotal += pointsThisRace;
                 // Push the cumulative total after this race
                 data.push(cumulativeTotal);
-            } else if (index <= lastCompletedIndex) {
+            } else if (raceIndexInChart <= lastCompletedIndex) {
                 // Race is before or at last completed, but no standings for this user
-                // Keep previous cumulative total (starts at 0, stays at 0 until first race with points)
+                // Keep previous cumulative total (stays at 0 until first race with points)
                 data.push(cumulativeTotal);
             } else {
                 // Future races (after last completed) - use null to break the line
@@ -2551,15 +2557,18 @@ function renderStandingsGraph(sortedUsers) {
         });
         
         // Store race-by-race points for tooltip calculation
-        user._racePoints = allCalendarRaces.map((race, index) => {
-            if (index > lastCompletedIndex) return null;
+        // Include Season Start (0 points) at index 0, then race points
+        // Note: lastCompletedIndex includes Season Start offset, so we compare with index+1
+        user._racePoints = [0, ...allCalendarRaces.map((race, index) => {
+            const raceIndexInChart = index + 1; // +1 because Season Start is at index 0
+            if (raceIndexInChart > lastCompletedIndex) return null;
             const raceIdStr = String(race.id);
             const raceStanding = state.standings[raceIdStr];
             if (raceStanding && userId && raceStanding[userId]) {
                 return raceStanding[userId].total || 0;
             }
             return 0;
-        });
+        })];
         
         // Verify: The final cumulative total should match the table total
         const tableTotal = user.total;
@@ -2574,11 +2583,16 @@ function renderStandingsGraph(sortedUsers) {
             tension: 0.4, // Smooth curves
             spanGaps: false, // Don't draw lines across null values (future races)
             pointRadius: function(context) {
-                // Show points only for completed races (non-null data)
-                return context.parsed.y !== null ? 4 : 0;
+                // Show points for all data points (including Season Start at 0)
+                // Hide points for future races (null values)
+                if (context.parsed.y === null) return 0;
+                // Show slightly smaller point for Season Start (index 0)
+                return context.dataIndex === 0 ? 3 : 4;
             },
             pointHoverRadius: function(context) {
-                return context.parsed.y !== null ? 6 : 0;
+                // Show hover effect for all data points (including Season Start)
+                if (context.parsed.y === null) return 0;
+                return context.dataIndex === 0 ? 5 : 6;
             },
             pointBackgroundColor: colors[userIdx % colors.length],
             pointBorderColor: '#fff',
@@ -2623,9 +2637,9 @@ function renderStandingsGraph(sortedUsers) {
                 if (elements.length > 0) {
                     const datasetIndex = elements[0].datasetIndex;
                     const index = elements[0].index;
-                    // Zoom to show 3 races around the clicked one
+                    // Zoom to show 3 races around the clicked one (accounting for Season Start at index 0)
                     const start = Math.max(0, index - 1);
-                    const end = Math.min(allCalendarRaces.length - 1, index + 1);
+                    const end = Math.min(allCalendarRaces.length, index + 1); // +1 for Season Start
                     window.standingsChart.zoomScale('x', { min: start, max: end });
                 }
             },
@@ -2684,6 +2698,19 @@ function renderStandingsGraph(sortedUsers) {
                             const currentValue = context.parsed.y;
                             const previousValue = context.dataIndex > 0 ? context.dataset.data[context.dataIndex - 1] : 0;
                             
+                            // Extract player name from label (remove points suffix)
+                            const playerName = user.username || context.dataset.label.split(' (')[0].replace(/^[🏎️🏁🏆🥇🔥⚡💨🎯🚗🏴]*\s*/, '');
+                            
+                            // Handle Season Start (index 0) specially
+                            if (dataIndex === 0) {
+                                return [
+                                    `Player: ${playerName}`,
+                                    `Season Start`,
+                                    `Points Earned: 0`,
+                                    `Total Points: 0`
+                                ];
+                            }
+                            
                             // Calculate points this race more accurately
                             let pointsThisRace = 0;
                             if (user._racePoints && user._racePoints[dataIndex] !== null && user._racePoints[dataIndex] !== undefined) {
@@ -2692,9 +2719,6 @@ function renderStandingsGraph(sortedUsers) {
                                 // Fallback calculation
                                 pointsThisRace = currentValue - (previousValue || 0);
                             }
-                            
-                            // Extract player name from label (remove points suffix)
-                            const playerName = user.username || context.dataset.label.split(' (')[0].replace(/^[🏎️🏁🏆🥇🔥⚡💨🎯🚗🏴]*\s*/, '');
                             
                             return [
                                 `Player: ${playerName}`,
@@ -2716,7 +2740,7 @@ function renderStandingsGraph(sortedUsers) {
                         },
                         mode: 'xy',
                         limits: {
-                            x: { min: 0, max: allCalendarRaces.length - 1 },
+                            x: { min: 0, max: allCalendarRaces.length }, // +1 for Season Start
                             y: { min: 0 }
                         }
                     },
@@ -2724,7 +2748,7 @@ function renderStandingsGraph(sortedUsers) {
                         enabled: true,
                         mode: 'xy',
                         limits: {
-                            x: { min: 0, max: allCalendarRaces.length - 1 },
+                            x: { min: 0, max: allCalendarRaces.length }, // +1 for Season Start
                             y: { min: 0 }
                         }
                     }
@@ -2755,6 +2779,10 @@ function renderStandingsGraph(sortedUsers) {
                         },
                         callback: function(value, index) {
                             const label = this.getLabelForValue(value);
+                            // Special handling for Season Start label
+                            if (index === 0 && label === 'Season Start') {
+                                return 'Start';
+                            }
                             // Truncate long race names for readability on mobile
                             const maxLength = window.innerWidth < 768 ? 10 : 15;
                             return label.length > maxLength ? label.substring(0, maxLength - 3) + '...' : label;
