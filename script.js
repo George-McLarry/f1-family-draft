@@ -292,13 +292,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     } catch (e) { console.error('Error updating admin controls:', e); }
     
-    // One-time reset: Set ALL players to 0 points in standings
+    // Reset ALL players to 0 points in standings (run on every load)
     try {
-        if (!localStorage.getItem('allPlayersPointsReset_v1')) {
-            resetAllPlayersPoints();
-            localStorage.setItem('allPlayersPointsReset_v1', 'true');
-            console.log('✅ All players\' points reset to 0');
-        }
+        resetAllPlayersPoints();
+        console.log('✅ All players\' points reset to 0');
     } catch (e) {
         console.warn('Points reset skipped:', e);
     }
@@ -785,6 +782,17 @@ function setupEventListeners() {
     if (exportCSVBtn) {
         exportCSVBtn.addEventListener('click', exportToCSV);
     }
+    
+    // Reset All Points button (admin only)
+    const resetAllPointsBtn = document.getElementById('resetAllPointsBtn');
+    if (resetAllPointsBtn) {
+        resetAllPointsBtn.addEventListener('click', () => {
+            if (confirm('⚠️ Warning: This will reset ALL players\' points to 0 for ALL races. This cannot be undone. Continue?')) {
+                resetAllPlayersPoints();
+                showToast('All players\' points have been reset to 0.', 'success');
+            }
+        });
+    }
     // Removed Edit Season Points UI
     
     // New event listeners
@@ -997,32 +1005,41 @@ function submitDraft() {
         const currentUserIdStr = String(state.currentUser);
         const currentUserIdNum = typeof state.currentUser === 'string' ? parseInt(state.currentUser, 10) : state.currentUser;
         
-        // Store submission in all formats
+        // Store submission in all formats BEFORE saving (so it's saved with the state)
         state.submissions.draft[selectedRaceId][state.currentUser] = true;
         state.submissions.draft[selectedRaceId][currentUserIdStr] = true;
         if (typeof currentUserIdNum === 'number' && !isNaN(currentUserIdNum)) {
             state.submissions.draft[selectedRaceId][currentUserIdNum] = true;
         }
         
-        // Persist with error handling
+        // Persist with error handling - if save fails, remove submission flag
         try {
             saveState();
-            // Push immediately for faster sharing
+            // Push immediately for faster sharing (non-blocking - don't wait for it)
             if (checkFirebase()) {
                 saveStateToFirebase().catch(err => {
-                    console.error('Firebase save error:', err);
+                    console.error('Firebase save error (non-critical):', err);
+                    // Local save succeeded, so draft is still submitted
+                    // Just warn user about sync issue
                     showToast('Draft saved locally. Syncing to cloud...', 'warning');
                 });
             }
+            
+            // Update banner to show "Submitted!" - only if save succeeded
+            updateDraftDisplay();
+            showToast('Draft submitted! Your ranking is saved for this race.', 'success');
+            
         } catch (error) {
             console.error('Error saving draft:', error);
+            // Remove submission flag if save failed
+            delete state.submissions.draft[selectedRaceId][state.currentUser];
+            delete state.submissions.draft[selectedRaceId][currentUserIdStr];
+            if (typeof currentUserIdNum === 'number' && !isNaN(currentUserIdNum)) {
+                delete state.submissions.draft[selectedRaceId][currentUserIdNum];
+            }
             showToast('Error saving draft. Please try again.', 'error');
             return;
         }
-        
-        // Update banner immediately to show "Submitted!"
-        updateDraftDisplay();
-        showToast('Draft submitted! Your ranking is saved for this race.', 'success');
         
     } catch (error) {
         console.error('Error in submitDraft:', error);
