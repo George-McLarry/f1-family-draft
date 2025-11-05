@@ -567,7 +567,10 @@ function saveStateToLocalStorage() {
 }
 
 function saveStateToFirebase() {
-    if (!checkFirebase()) return;
+    // Always return a Promise for consistent error handling
+    if (!checkFirebase()) {
+        return Promise.resolve(); // Return resolved promise if Firebase not available
+    }
     
     updateSyncStatus('syncing');
     
@@ -580,14 +583,20 @@ function saveStateToFirebase() {
     delete stateToSave.history; // Don't sync history
     
     // Use set() to completely overwrite (not update)
-    stateRef.set(stateToSave).then(() => {
+    return stateRef.set(stateToSave).then(() => {
         updateSyncStatus('synced');
         console.log('State saved to Firebase successfully');
+        return true;
     }).catch((error) => {
         // If save fails, fallback to localStorage
         console.error('Firebase save error:', error);
         updateSyncStatus('error');
-        localStorage.setItem('f1DraftState', JSON.stringify(state));
+        try {
+            localStorage.setItem('f1DraftState', JSON.stringify(state));
+        } catch (e) {
+            console.error('LocalStorage save also failed:', e);
+        }
+        return false;
     });
 }
 
@@ -1016,14 +1025,13 @@ function submitDraft() {
         try {
             saveState();
             // Push immediately for faster sharing (non-blocking - don't wait for it)
-            if (checkFirebase()) {
-                saveStateToFirebase().catch(err => {
-                    console.error('Firebase save error (non-critical):', err);
-                    // Local save succeeded, so draft is still submitted
-                    // Just warn user about sync issue
-                    showToast('Draft saved locally. Syncing to cloud...', 'warning');
-                });
-            }
+            // saveStateToFirebase() always returns a Promise now, so we can safely use .catch()
+            saveStateToFirebase().catch(err => {
+                console.error('Firebase save error (non-critical):', err);
+                // Local save succeeded, so draft is still submitted
+                // Just warn user about sync issue
+                showToast('Draft saved locally. Syncing to cloud...', 'warning');
+            });
             
             // Update banner to show "Submitted!" - only if save succeeded
             updateDraftDisplay();
@@ -1463,7 +1471,16 @@ function updateDraftDisplay() {
         const ms = deadline ? Math.max(0, deadline - now) : null;
         const hours = ms !== null ? Math.floor(ms / 3600000) : '-';
         const minutes = ms !== null ? Math.floor((ms % 3600000) / 60000) : '-';
-        const submitted = state.submissions && state.submissions.draft && state.submissions.draft[currentRace.id] && state.submissions.draft[currentRace.id][state.currentUser];
+        
+        // Check submission using both string and number ID formats for reliability
+        const raceIdStr = String(currentRace.id);
+        const raceIdNum = typeof currentRace.id === 'string' ? parseInt(currentRace.id, 10) : currentRace.id;
+        const currentUserIdStr = String(state.currentUser);
+        const currentUserIdNum = typeof state.currentUser === 'string' ? parseInt(state.currentUser, 10) : state.currentUser;
+        
+        const submissionsForRace = state.submissions && state.submissions.draft ? (state.submissions.draft[raceIdStr] || state.submissions.draft[currentRace.id] || state.submissions.draft[raceIdNum] || {}) : {};
+        const submitted = submissionsForRace[state.currentUser] || submissionsForRace[currentUserIdStr] || (typeof currentUserIdNum === 'number' && !isNaN(currentUserIdNum) && submissionsForRace[currentUserIdNum]);
+        
         draftBanner.innerHTML = `
             <div>
                 <div><strong>${currentRace.name}</strong> — Drafting Open</div>
