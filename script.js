@@ -8,7 +8,12 @@ function generatePicksForRace(draftType, raceId) {
     
     const isChilton = draftType === 'chilton';
     const submissionsForRace = (state.submissions && state.submissions.draft && state.submissions.draft[raceIdStr]) ? state.submissions.draft[raceIdStr] : {};
-    const submittedUsers = state.users.filter(u => submissionsForRace[u.id]);
+    // Check submissions using both string and number ID formats for reliability
+    const submittedUsers = state.users.filter(u => {
+        const userIdStr = String(u.id);
+        const userIdNum = typeof u.id === 'string' ? parseInt(u.id, 10) : u.id;
+        return submissionsForRace[u.id] || submissionsForRace[userIdStr] || (typeof userIdNum === 'number' && !isNaN(userIdNum) && submissionsForRace[userIdNum]);
+    });
     // If no submissions, return empty
     if (submittedUsers.length === 0) return [];
     
@@ -286,6 +291,17 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => updateAdminControls(), 500);
         }
     } catch (e) { console.error('Error updating admin controls:', e); }
+    
+    // One-time reset: Set ALL players to 0 points in standings
+    try {
+        if (!localStorage.getItem('allPlayersPointsReset_v1')) {
+            resetAllPlayersPoints();
+            localStorage.setItem('allPlayersPointsReset_v1', 'true');
+            console.log('✅ All players\' points reset to 0');
+        }
+    } catch (e) {
+        console.warn('Points reset skipped:', e);
+    }
 
     // Start draft window timer to auto-lock on deadlines
     startDraftWindowTimer();
@@ -312,6 +328,56 @@ function checkFirebase() {
     
     USE_FIREBASE = false;
     return false;
+}
+
+// Toast notification system for user feedback (replaces alerts)
+function showToast(message, type = 'info') {
+    // Remove existing toasts
+    const existingToasts = document.querySelectorAll('.toast');
+    existingToasts.forEach(toast => toast.remove());
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: ${type === 'error' ? 'var(--error)' : type === 'success' ? 'var(--success)' : type === 'warning' ? 'var(--warning)' : 'var(--bg-tertiary)'};
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 10000;
+        max-width: 300px;
+        font-size: 0.9rem;
+        animation: slideIn 0.3s ease-out;
+    `;
+    toast.textContent = message;
+    
+    // Add animation styles if not already added
+    if (!document.getElementById('toast-styles')) {
+        const style = document.createElement('style');
+        style.id = 'toast-styles';
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(toast);
+    
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-out';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
 }
 
 // Update sync status indicator
@@ -859,55 +925,109 @@ function getLastRankingForUser(userId, draftType) {
 }
 
 function submitDraft() {
-    if (!state.currentUser) {
-        alert('Please sign in first using the header dropdown.');
-        return;
-    }
-    const currentRace = getCurrentDraftRace();
-    if (!currentRace) {
-        alert('No open draft at the moment.');
-        return;
-    }
-    const draftType = 'grojean'; // Always grojean now
-    if (!state.userRankings) state.userRankings = { grojean: {}, chilton: {} };
-    if (!state.userRankings[draftType]) state.userRankings[draftType] = {};
-    if (!state.userRankings[draftType][state.currentUser]) state.userRankings[draftType][state.currentUser] = {};
-    
-    const selectedRaceId = String(currentRace.id);
-    const rankingsList = document.getElementById('rankingsList');
-    let rankings = [];
-    
-    // Get current rankings from DOM if they exist
-    if (rankingsList) {
-        const items = rankingsList.querySelectorAll('.ranking-item[data-driver-id]');
-        rankings = Array.from(items).map(item => parseInt(item.dataset.driverId));
-    }
-    
-    // If no rankings in DOM, use existing or default
-    if (rankings.length === 0) {
-        rankings = state.userRankings[draftType][state.currentUser][selectedRaceId];
-        if (!rankings || rankings.length === 0) {
-            const last = getLastRankingForUser(state.currentUser, draftType);
-            rankings = last ? [...last] : [...DRIVERS.map(d=>d.id)];
+    try {
+        // Validation: Ensure user is signed in
+        if (!state.currentUser) {
+            showToast('Please sign in first using the header dropdown.', 'error');
+            return;
         }
+        
+        // Validation: Ensure there's an open draft
+        const currentRace = getCurrentDraftRace();
+        if (!currentRace) {
+            showToast('No open draft at the moment.', 'error');
+            return;
+        }
+        
+        const draftType = 'grojean'; // Always grojean now
+        if (!state.userRankings) state.userRankings = { grojean: {}, chilton: {} };
+        if (!state.userRankings[draftType]) state.userRankings[draftType] = {};
+        if (!state.userRankings[draftType][state.currentUser]) state.userRankings[draftType][state.currentUser] = {};
+        
+        const selectedRaceId = String(currentRace.id);
+        const rankingsList = document.getElementById('rankingsList');
+        let rankings = [];
+        
+        // Get current rankings from DOM if they exist
+        if (rankingsList) {
+            const items = rankingsList.querySelectorAll('.ranking-item[data-driver-id]');
+            rankings = Array.from(items).map(item => parseInt(item.dataset.driverId)).filter(id => !isNaN(id));
+        }
+        
+        // If no rankings in DOM, use existing or default
+        if (rankings.length === 0) {
+            rankings = state.userRankings[draftType][state.currentUser][selectedRaceId];
+            if (!rankings || rankings.length === 0) {
+                const last = getLastRankingForUser(state.currentUser, draftType);
+                rankings = last ? [...last] : [...DRIVERS.map(d=>d.id)];
+            }
+        }
+        
+        // Validation: Ensure we have exactly 20 unique drivers
+        if (rankings.length !== DRIVERS.length) {
+            showToast(`Invalid draft: Expected ${DRIVERS.length} drivers, got ${rankings.length}. Please rank all drivers.`, 'error');
+            return;
+        }
+        
+        const uniqueDrivers = new Set(rankings);
+        if (uniqueDrivers.size !== DRIVERS.length) {
+            showToast('Invalid draft: Duplicate drivers detected. Please rank each driver exactly once.', 'error');
+            return;
+        }
+        
+        // Save rankings with timestamp for audit trail
+        state.userRankings[draftType][state.currentUser][selectedRaceId] = rankings;
+        if (!state.draftHistory) state.draftHistory = { grojean: {}, chilton: {} };
+        if (!state.draftHistory[draftType]) state.draftHistory[draftType] = {};
+        if (!state.draftHistory[draftType][state.currentUser]) state.draftHistory[draftType][state.currentUser] = {};
+        if (!state.draftHistory[draftType][state.currentUser][selectedRaceId]) {
+            state.draftHistory[draftType][state.currentUser][selectedRaceId] = {
+                rankings: rankings,
+                submittedAt: Date.now(),
+                raceId: selectedRaceId
+            };
+        }
+        
+        // Mark submission for this race (engagement requirement)
+        // Save in multiple ID formats for maximum reliability
+        if (!state.submissions) state.submissions = { draft: {}, bonus: {} };
+        if (!state.submissions.draft) state.submissions.draft = {};
+        if (!state.submissions.draft[selectedRaceId]) state.submissions.draft[selectedRaceId] = {};
+        
+        const currentUserIdStr = String(state.currentUser);
+        const currentUserIdNum = typeof state.currentUser === 'string' ? parseInt(state.currentUser, 10) : state.currentUser;
+        
+        // Store submission in all formats
+        state.submissions.draft[selectedRaceId][state.currentUser] = true;
+        state.submissions.draft[selectedRaceId][currentUserIdStr] = true;
+        if (typeof currentUserIdNum === 'number' && !isNaN(currentUserIdNum)) {
+            state.submissions.draft[selectedRaceId][currentUserIdNum] = true;
+        }
+        
+        // Persist with error handling
+        try {
+            saveState();
+            // Push immediately for faster sharing
+            if (checkFirebase()) {
+                saveStateToFirebase().catch(err => {
+                    console.error('Firebase save error:', err);
+                    showToast('Draft saved locally. Syncing to cloud...', 'warning');
+                });
+            }
+        } catch (error) {
+            console.error('Error saving draft:', error);
+            showToast('Error saving draft. Please try again.', 'error');
+            return;
+        }
+        
+        // Update banner immediately to show "Submitted!"
+        updateDraftDisplay();
+        showToast('Draft submitted! Your ranking is saved for this race.', 'success');
+        
+    } catch (error) {
+        console.error('Error in submitDraft:', error);
+        showToast('An unexpected error occurred. Please try again.', 'error');
     }
-    
-    // Save rankings
-    state.userRankings[draftType][state.currentUser][selectedRaceId] = rankings;
-    
-    // Mark submission for this race (engagement requirement)
-    if (!state.submissions) state.submissions = { draft: {}, bonus: {} };
-    if (!state.submissions.draft) state.submissions.draft = {};
-    if (!state.submissions.draft[selectedRaceId]) state.submissions.draft[selectedRaceId] = {};
-    state.submissions.draft[selectedRaceId][state.currentUser] = true;
-    saveState();
-    // Push immediately for faster sharing
-    if (checkFirebase()) saveStateToFirebase();
-    
-    // Update banner immediately to show "Submitted!"
-    updateDraftDisplay();
-    
-    alert('Draft submitted! Your ranking is saved for this race.');
 }
 
 // Draft window helpers
@@ -1622,90 +1742,49 @@ function renderPolePicksCurrent(currentRace) {
         renderBonusPicks();
     });
     
-    // Auto-scroll when dragging - use document-level dragover listener for better tracking
+    // Auto-scroll when dragging - only scroll when mouse is actually at edge
     let poleScrollInterval = null;
-    const startPoleScroll = () => {
+    let lastMouseY = null;
+    
+    poleDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        lastMouseY = e.clientY; // Track mouse Y position
         if (!poleScrollInterval) {
             poleScrollInterval = setInterval(() => {
-                const scrollThreshold = 150;
-                const scrollSpeed = 20;
-                const scrollY = window.scrollY || window.pageYOffset;
+                if (lastMouseY === null) return; // No mouse position yet
+                
+                const scrollThreshold = 100; // Only scroll within 100px of edge
+                const scrollSpeed = 15;
                 const viewportHeight = window.innerHeight;
                 const documentHeight = document.documentElement.scrollHeight;
+                const scrollY = window.scrollY || window.pageYOffset;
                 
-                // Check if we can scroll up (near top of viewport)
-                if (scrollY > 0 && scrollY < scrollThreshold) {
+                // Only scroll if mouse is actually at the edge
+                if (lastMouseY < scrollThreshold && scrollY > 0) {
+                    // Mouse near top - scroll up
                     window.scrollBy(0, -scrollSpeed);
-                }
-                // Check if we can scroll down (near bottom of viewport)
-                else if (scrollY + viewportHeight < documentHeight - scrollThreshold) {
+                } else if (lastMouseY > viewportHeight - scrollThreshold && scrollY + viewportHeight < documentHeight) {
+                    // Mouse near bottom - scroll down
                     window.scrollBy(0, scrollSpeed);
                 }
-            }, 50);
+            }, 100); // Slower interval to reduce glitches
         }
-    };
+    });
     
     const stopPoleScroll = () => {
+        lastMouseY = null;
         if (poleScrollInterval) {
             clearInterval(poleScrollInterval);
             poleScrollInterval = null;
         }
     };
     
-    poleDropZone.addEventListener('dragenter', startPoleScroll);
     poleDropZone.addEventListener('dragleave', stopPoleScroll);
     poleDropZone.addEventListener('drop', stopPoleScroll);
     poleDropZone.addEventListener('dragend', stopPoleScroll);
     
     // Global drag tracking for auto-scroll - set up once per page load
-    if (!window.globalDragScrollSetup) {
-        window.globalDragScrollSetup = true;
-        let globalScrollInterval = null;
-        let isDragging = false;
-        let lastMouseY = 0;
-        
-        document.addEventListener('dragstart', () => {
-            isDragging = true;
-        });
-        
-        document.addEventListener('dragover', (e) => {
-            if (isDragging) {
-                lastMouseY = e.clientY;
-                if (!globalScrollInterval) {
-                    globalScrollInterval = setInterval(() => {
-                        if (!isDragging) {
-                            clearInterval(globalScrollInterval);
-                            globalScrollInterval = null;
-                            return;
-                        }
-                        const scrollThreshold = 150;
-                        const scrollSpeed = 20;
-                        const viewportHeight = window.innerHeight;
-                        const documentHeight = document.documentElement.scrollHeight;
-                        const scrollY = window.scrollY || window.pageYOffset;
-                        
-                        // Use last known mouse position for scroll decision
-                        // Scroll up if mouse near top of viewport
-                        if (lastMouseY < scrollThreshold && scrollY > 0) {
-                            window.scrollBy(0, -scrollSpeed);
-                        }
-                        // Scroll down if mouse near bottom of viewport
-                        else if (lastMouseY > viewportHeight - scrollThreshold && scrollY + viewportHeight < documentHeight) {
-                            window.scrollBy(0, scrollSpeed);
-                        }
-                    }, 50);
-                }
-            }
-        });
-        
-        document.addEventListener('dragend', () => {
-            isDragging = false;
-            if (globalScrollInterval) {
-                clearInterval(globalScrollInterval);
-                globalScrollInterval = null;
-            }
-        });
-    }
+    // DISABLED - was causing glitches. Only use zone-specific scroll.
     
     poleBox.appendChild(poleDropZone);
     
@@ -1818,37 +1897,43 @@ function renderTop5PicksCurrent(currentRace) {
             renderTop5PicksCurrent(currentRace);
         });
         
-        // Auto-scroll when dragging - use document-level dragover listener for better tracking
+        // Auto-scroll when dragging - only scroll when mouse is actually at edge
         let top5ScrollInterval = null;
-        const startTop5Scroll = () => {
+        let lastMouseY = null;
+        
+        zone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            lastMouseY = e.clientY; // Track mouse Y position
             if (!top5ScrollInterval) {
                 top5ScrollInterval = setInterval(() => {
-                    const scrollThreshold = 150;
-                    const scrollSpeed = 20;
-                    const scrollY = window.scrollY || window.pageYOffset;
+                    if (lastMouseY === null) return; // No mouse position yet
+                    
+                    const scrollThreshold = 100; // Only scroll within 100px of edge
+                    const scrollSpeed = 15;
                     const viewportHeight = window.innerHeight;
                     const documentHeight = document.documentElement.scrollHeight;
+                    const scrollY = window.scrollY || window.pageYOffset;
                     
-                    // Check if we can scroll up (near top of viewport)
-                    if (scrollY > 0 && scrollY < scrollThreshold) {
+                    // Only scroll if mouse is actually at the edge
+                    if (lastMouseY < scrollThreshold && scrollY > 0) {
+                        // Mouse near top - scroll up
                         window.scrollBy(0, -scrollSpeed);
-                    }
-                    // Check if we can scroll down (near bottom of viewport)
-                    else if (scrollY + viewportHeight < documentHeight - scrollThreshold) {
+                    } else if (lastMouseY > viewportHeight - scrollThreshold && scrollY + viewportHeight < documentHeight) {
+                        // Mouse near bottom - scroll down
                         window.scrollBy(0, scrollSpeed);
                     }
-                }, 50);
+                }, 100); // Slower interval to reduce glitches
             }
-        };
+        });
         
         const stopTop5Scroll = () => {
+            lastMouseY = null;
             if (top5ScrollInterval) {
                 clearInterval(top5ScrollInterval);
                 top5ScrollInterval = null;
             }
         };
         
-        zone.addEventListener('dragenter', startTop5Scroll);
         zone.addEventListener('dragleave', stopTop5Scroll);
         zone.addEventListener('drop', stopTop5Scroll);
         zone.addEventListener('dragend', stopTop5Scroll);
@@ -1962,7 +2047,14 @@ function submitBonuses() {
     if (!state.submissions) state.submissions = { draft: {}, bonus: {} };
     if (!state.submissions.bonus) state.submissions.bonus = {};
     if (!state.submissions.bonus[raceIdStr]) state.submissions.bonus[raceIdStr] = {};
+    // Save submission in multiple formats to ensure reliability
+    const currentUserIdStr = String(state.currentUser);
+    const currentUserIdNum = typeof state.currentUser === 'string' ? parseInt(state.currentUser, 10) : state.currentUser;
     state.submissions.bonus[raceIdStr][state.currentUser] = true;
+    state.submissions.bonus[raceIdStr][currentUserIdStr] = true;
+    if (typeof currentUserIdNum === 'number' && !isNaN(currentUserIdNum)) {
+        state.submissions.bonus[raceIdStr][currentUserIdNum] = true;
+    }
 
     // Persist
     saveState();
@@ -2451,118 +2543,163 @@ function saveRaceResults() {
 }
 
 function calculateRaceScores(race) {
-    // Validate race ID
-    const raceIdStr = String(race.id);
-    if (!validateRaceId(race.id, 'calculateRaceScores')) {
-        console.error(`Cannot calculate scores: Race ID ${raceIdStr} not in calendar`);
-        return;
-    }
-    
-    // Initialize standings for this race if needed
-    if (!state.standings[raceIdStr]) {
-        state.standings[raceIdStr] = {};
-    }
-
-    const raceStandings = state.standings[raceIdStr];
-
-    state.users.forEach(user => {
-        if (!raceStandings[user.id]) {
-            raceStandings[user.id] = {
-                grojean: 0,
-                chilton: 0,
-                poleBonus: 0,
-                top5Bonus: 0,
-                total: 0
-            };
-        }
-
-        const userStanding = raceStandings[user.id];
-        
-        // Grojean Draft Points (only if user submitted draft for this race)
-        let grojeanPoints = 0;
+    try {
+        // Validate race ID
         const raceIdStr = String(race.id);
-        const draftSubmitted = state.submissions && state.submissions.draft && state.submissions.draft[raceIdStr] && state.submissions.draft[raceIdStr][user.id];
+        if (!validateRaceId(race.id, 'calculateRaceScores')) {
+            console.error(`Cannot calculate scores: Race ID ${raceIdStr} not in calendar`);
+            return;
+        }
         
-        if (draftSubmitted) {
-            const picks = generatePicksForRace('grojean', raceIdStr);
-            const userPicks = picks.filter(p => p.userId === user.id);
-            userPicks.forEach(pick => {
-                const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
-                if (finishData === 'DNS') {
-                    grojeanPoints += 0;
-                } else if (finishData === 'NC,DNF') {
-                    grojeanPoints -= 1; // Non-Classified DNF
-                } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
-                    // Classified DNF - treat as finishing in that position
-                    grojeanPoints += (21 - finishData.position);
-                } else if (finishData && typeof finishData === 'number') {
-                    grojeanPoints += (21 - finishData);
-                }
-            });
+        // Initialize standings for this race if needed
+        if (!state.standings[raceIdStr]) {
+            state.standings[raceIdStr] = {};
         }
 
-        // Chilton Draft Points
-        let chiltonPoints = 0;
-        if (draftSubmitted) {
-            const picks = generatePicksForRace('chilton', raceIdStr);
-            const userPicks = picks.filter(p => p.userId === user.id);
-            userPicks.forEach(pick => {
-                const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
-                if (finishData === 'DNS') {
-                    chiltonPoints += 0;
-                } else if (finishData === 'NC,DNF') {
-                    chiltonPoints -= 1; // Non-Classified DNF
-                } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
-                    // Classified DNF - treat as finishing in that position
-                    chiltonPoints += finishData.position;
-                } else if (finishData && typeof finishData === 'number') {
-                    chiltonPoints += finishData;
-                }
-            });
-        }
+        const raceStandings = state.standings[raceIdStr];
 
-        // Pole Bonus - 2 points if correct, 0 if wrong
-        let poleBonus = 0;
-        const bonusesSubmitted = state.submissions && state.submissions.bonus && state.submissions.bonus[raceIdStr] && state.submissions.bonus[raceIdStr][user.id];
-        const polePick = bonusesSubmitted && state.bonusPicks.pole && state.bonusPicks.pole[user.id] && state.bonusPicks.pole[user.id][raceIdStr];
-        if (polePick && race.pole === polePick) {
-            poleBonus = 2;
+        // EXPLICITLY loop through ALL players to ensure no one is missed
+        if (!state.users || state.users.length === 0) {
+            console.warn('No users found - cannot calculate scores');
+            return;
         }
-
-        // Top 5 Bonus - New scoring system
-        // 1 point per driver in top 5 + 1 bonus point for exact position match
-        let top5Bonus = 0;
-        const top5Picks = bonusesSubmitted && state.bonusPicks.top5 && state.bonusPicks.top5[user.id] && state.bonusPicks.top5[user.id][raceIdStr] ? state.bonusPicks.top5[user.id][raceIdStr] : [];
-        const top5Results = getTop5Results(race.results);
         
-        // For each predicted driver in user's top 5
-        top5Picks.forEach((predictedDriverId, predictedPosition) => {
-            if (!predictedDriverId) return;
-            
-            // Check if this driver finished in the actual top 5 (any position)
-            const actualPosition = top5Results.indexOf(predictedDriverId);
-            
-            if (actualPosition !== -1) {
-                // Driver is in top 5 - give 1 point
-                top5Bonus += 1;
-                
-                // Check if exact position match (predictedPosition matches actualPosition)
-                if (predictedPosition === actualPosition) {
-                    // Exact position match - give bonus point
-                    top5Bonus += 1;
-                }
+        console.log(`Calculating scores for race ${raceIdStr} - ${state.users.length} players`);
+        
+        state.users.forEach((user, index) => {
+            if (!raceStandings[user.id]) {
+                raceStandings[user.id] = {
+                    grojean: 0,
+                    chilton: 0,
+                    poleBonus: 0,
+                    top5Bonus: 0,
+                    total: 0
+                };
             }
-            // If driver not in top 5, no points (already handled by actualPosition === -1)
+
+            const userStanding = raceStandings[user.id];
+            
+            // Grojean Draft Points (only if user submitted draft for this race)
+            let grojeanPoints = 0;
+            const raceIdStr = String(race.id);
+            // Check submission using both string and number ID formats for reliability
+            const userIdStr = String(user.id);
+            const userIdNum = typeof user.id === 'string' ? parseInt(user.id, 10) : user.id;
+            const draftSubmitted = state.submissions && state.submissions.draft && state.submissions.draft[raceIdStr] && 
+                (state.submissions.draft[raceIdStr][user.id] || state.submissions.draft[raceIdStr][userIdStr] || (typeof userIdNum === 'number' && !isNaN(userIdNum) && state.submissions.draft[raceIdStr][userIdNum]));
+            
+            if (draftSubmitted) {
+                const picks = generatePicksForRace('grojean', raceIdStr);
+                // Filter picks using both string and number ID formats for reliability
+                const userPicks = picks.filter(p => {
+                    const pickUserIdStr = String(p.userId);
+                    return String(p.userId) === userIdStr || pickUserIdStr === String(user.id) || p.userId === user.id || (typeof userIdNum === 'number' && !isNaN(userIdNum) && p.userId === userIdNum);
+                });
+                userPicks.forEach(pick => {
+                    const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
+                    if (finishData === 'DNS') {
+                        grojeanPoints += 0;
+                    } else if (finishData === 'NC,DNF') {
+                        grojeanPoints -= 1; // Non-Classified DNF
+                    } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
+                        // Classified DNF - treat as finishing in that position
+                        grojeanPoints += (21 - finishData.position);
+                    } else if (finishData && typeof finishData === 'number') {
+                        grojeanPoints += (21 - finishData);
+                    }
+                });
+            }
+
+            // Chilton Draft Points
+            let chiltonPoints = 0;
+            if (draftSubmitted) {
+                const picks = generatePicksForRace('chilton', raceIdStr);
+                // Filter picks using both string and number ID formats for reliability
+                const userPicks = picks.filter(p => {
+                    const pickUserIdStr = String(p.userId);
+                    return String(p.userId) === userIdStr || pickUserIdStr === String(user.id) || p.userId === user.id || (typeof userIdNum === 'number' && !isNaN(userIdNum) && p.userId === userIdNum);
+                });
+                userPicks.forEach(pick => {
+                    const finishData = getDriverFinishPosition(race.results, race.statuses || {}, pick.driverId);
+                    if (finishData === 'DNS') {
+                        chiltonPoints += 0;
+                    } else if (finishData === 'NC,DNF') {
+                        chiltonPoints -= 1; // Non-Classified DNF
+                    } else if (finishData && typeof finishData === 'object' && finishData.status === 'C,DNF') {
+                        // Classified DNF - treat as finishing in that position
+                        chiltonPoints += finishData.position;
+                    } else if (finishData && typeof finishData === 'number') {
+                        chiltonPoints += finishData;
+                    }
+                });
+            }
+
+            // Pole Bonus - 2 points if correct, 0 if wrong
+            let poleBonus = 0;
+            // Check bonus submission using both string and number ID formats for reliability
+            const bonusesSubmitted = state.submissions && state.submissions.bonus && state.submissions.bonus[raceIdStr] && 
+                (state.submissions.bonus[raceIdStr][user.id] || state.submissions.bonus[raceIdStr][userIdStr] || (typeof userIdNum === 'number' && !isNaN(userIdNum) && state.submissions.bonus[raceIdStr][userIdNum]));
+            const polePick = bonusesSubmitted && state.bonusPicks.pole && state.bonusPicks.pole[user.id] && state.bonusPicks.pole[user.id][raceIdStr];
+            if (polePick && race.pole === polePick) {
+                poleBonus = 2;
+            }
+
+            // Top 5 Bonus - New scoring system
+            // 1 point per driver in top 5 + 1 bonus point for exact position match
+            let top5Bonus = 0;
+            const top5Picks = bonusesSubmitted && state.bonusPicks.top5 && state.bonusPicks.top5[user.id] && state.bonusPicks.top5[user.id][raceIdStr] ? state.bonusPicks.top5[user.id][raceIdStr] : [];
+            const top5Results = getTop5Results(race.results);
+            
+            // For each predicted driver in user's top 5
+            top5Picks.forEach((predictedDriverId, predictedPosition) => {
+                if (!predictedDriverId) return;
+                
+                // Check if this driver finished in the actual top 5 (any position)
+                const actualPosition = top5Results.indexOf(predictedDriverId);
+                
+                if (actualPosition !== -1) {
+                    // Driver is in top 5 - give 1 point
+                    top5Bonus += 1;
+                    
+                    // Check if exact position match (predictedPosition matches actualPosition)
+                    if (predictedPosition === actualPosition) {
+                        // Exact position match - give bonus point
+                        top5Bonus += 1;
+                    }
+                }
+                // If driver not in top 5, no points (already handled by actualPosition === -1)
+            });
+
+            userStanding.grojean = grojeanPoints;
+            userStanding.chilton = chiltonPoints;
+            userStanding.poleBonus = poleBonus;
+            userStanding.top5Bonus = top5Bonus;
+            userStanding.total = grojeanPoints + chiltonPoints + poleBonus + top5Bonus;
+            
+            // Store in multiple ID formats for reliability (userIdStr and userIdNum already defined above)
+            raceStandings[user.id] = userStanding;
+            raceStandings[userIdStr] = userStanding;
+            if (typeof userIdNum === 'number' && !isNaN(userIdNum)) {
+                raceStandings[userIdNum] = userStanding;
+            }
+            
+            // Log calculation for audit
+            if (draftSubmitted || bonusesSubmitted) {
+                console.log(`Player ${user.username} (${user.id}): Draft=${draftSubmitted}, Grojean=${grojeanPoints}, Chilton=${chiltonPoints}, Pole=${poleBonus}, Top5=${top5Bonus}, Total=${userStanding.total}`);
+            }
         });
-
-        userStanding.grojean = grojeanPoints;
-        userStanding.chilton = chiltonPoints;
-        userStanding.poleBonus = poleBonus;
-        userStanding.top5Bonus = top5Bonus;
-        userStanding.total = grojeanPoints + chiltonPoints + poleBonus + top5Bonus;
-    });
-
-    saveState();
+        
+        console.log(`Score calculation complete for race ${raceIdStr}`);
+        saveState();
+        
+    } catch (error) {
+        console.error('Error calculating race scores:', error);
+        if (typeof showToast === 'function') {
+            showToast('Error calculating scores. Please check console for details.', 'error');
+        } else {
+            alert('Error calculating scores. Please check console for details.');
+        }
+    }
 }
 
 function getDriverFinishPosition(results, statuses, driverId) {
@@ -2672,6 +2809,58 @@ function resetStandingsPointsForUsers(usernames) {
     if (checkFirebase()) saveStateToFirebase();
     updateStandings();
     updateStandingsDisplay();
+}
+
+// Reset ALL players' points to 0 (for fresh start)
+function resetAllPlayersPoints() {
+    try {
+        if (!state.users || state.users.length === 0) {
+            console.warn('No users found - cannot reset points');
+            return;
+        }
+        
+        // Reset all standings for ALL users across all races
+        Object.keys(state.standings || {}).forEach(raceId => {
+            const raceStandings = state.standings[raceId];
+            if (!raceStandings) return;
+            state.users.forEach(user => {
+                const userIdStr = String(user.id);
+                const userIdNum = typeof user.id === 'string' ? parseInt(user.id, 10) : user.id;
+                raceStandings[user.id] = {
+                    grojean: 0,
+                    chilton: 0,
+                    poleBonus: 0,
+                    top5Bonus: 0,
+                    total: 0
+                };
+                raceStandings[userIdStr] = raceStandings[user.id];
+                if (typeof userIdNum === 'number' && !isNaN(userIdNum)) {
+                    raceStandings[userIdNum] = raceStandings[user.id];
+                }
+            });
+        });
+        
+        // Reset season adjustments for all users
+        if (!state.seasonAdjustments) state.seasonAdjustments = {};
+        state.users.forEach(user => {
+            const userIdStr = String(user.id);
+            const userIdNum = typeof user.id === 'string' ? parseInt(user.id, 10) : user.id;
+            state.seasonAdjustments[user.id] = 0;
+            state.seasonAdjustments[userIdStr] = 0;
+            if (typeof userIdNum === 'number' && !isNaN(userIdNum)) {
+                state.seasonAdjustments[userIdNum] = 0;
+            }
+        });
+        
+        saveState();
+        if (checkFirebase()) saveStateToFirebase();
+        updateStandings();
+        updateStandingsDisplay();
+        
+        console.log(`✅ Reset all ${state.users.length} players' points to 0`);
+    } catch (error) {
+        console.error('Error resetting all players points:', error);
+    }
 }
 
     // Standings
@@ -4341,21 +4530,17 @@ function showMyDriversForRace() {
     myDriversDisplay.style.display = 'block';
 }
 
-// Render Logs Page
+// Render Logs Page - PUBLIC: Shows ALL players' draft history for transparency
 function renderLogs() {
     const logsContent = document.getElementById('logsContent');
     if (!logsContent) return;
     
-    if (!state.currentUser) {
-        logsContent.innerHTML = '<p class="info-text">Please sign in using the header dropdown to view your race logs.</p>';
-        return;
-    }
-    
-    const user = state.users.find(u => u.id === state.currentUser);
-    if (!user) {
-        logsContent.innerHTML = '<p class="info-text">User not found.</p>';
-        return;
-    }
+    try {
+        // PUBLIC ACCESS: No sign-in required - show all players' data
+        if (!state.users || state.users.length === 0) {
+            logsContent.innerHTML = '<p class="info-text">No users found. Add users to start drafting.</p>';
+            return;
+        }
     
     // Get all completed races with results (sorted chronologically)
     const racesWithResults = (state.raceCalendar || [])
@@ -4370,79 +4555,170 @@ function renderLogs() {
         return;
     }
     
-    let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+    // Add filters and export button for public transparency
+    let html = `
+        <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+            <label style="display: flex; align-items: center; gap: 5px;">
+                <strong>Filter by Player:</strong>
+                <select id="logsPlayerFilter" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary);">
+                    <option value="all">All Players</option>
+                    ${state.users.map(u => `<option value="${u.id}">${u.avatar} ${u.username}</option>`).join('')}
+                </select>
+            </label>
+            <label style="display: flex; align-items: center; gap: 5px;">
+                <strong>Filter by Race:</strong>
+                <select id="logsRaceFilter" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary);">
+                    <option value="all">All Races</option>
+                    ${racesWithResults.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}
+                </select>
+            </label>
+            <button id="exportLogsCSVBtn" class="btn-secondary" style="padding: 8px 15px;">Export CSV</button>
+        </div>
+    `;
     
-    // Render each race
-    racesWithResults.forEach(race => {
-        const raceIdStr = String(race.id);
-        const raceData = state.races.find(r => String(r.id) === raceIdStr);
-        const raceStandings = state.standings[raceIdStr];
-        const userStanding = raceStandings && raceStandings[state.currentUser];
-        
-        // Get picks for this race
-        const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
-        const myGrojeanPick = grojeanPicks.find(p => p.userId === state.currentUser);
-        const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
-        
-        const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
-        const myChiltonPick = chiltonPicks.find(p => p.userId === state.currentUser);
-        const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
-        
-        const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[state.currentUser] && state.bonusPicks.top5[state.currentUser][raceIdStr] 
-            ? state.bonusPicks.top5[state.currentUser][raceIdStr] 
-            : [];
-        const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
-        
-        const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[state.currentUser] && state.bonusPicks.pole[state.currentUser][raceIdStr]
-            ? state.bonusPicks.pole[state.currentUser][raceIdStr]
-            : null;
-        const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
-        
-        const raceDate = new Date(race.date || race.deadlineDate).toLocaleDateString();
-        const points = userStanding ? userStanding.total : 0;
-        
-        html += `<div class="log-race-card" style="padding: 20px; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color);">
-            <h3 style="margin-bottom: 15px; color: var(--accent-primary);">${race.name}</h3>
-            <p style="margin-bottom: 15px; color: var(--text-secondary); font-size: 0.9rem;">${raceDate}</p>
+    html += '<div id="logsTableContainer" style="overflow-x: auto;">';
+    html += '<table class="logs-table" style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem;">';
+    html += '<thead><tr style="background: var(--bg-tertiary); position: sticky; top: 0;">';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Player</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Race</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Date</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">First Place</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Last Place</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Top 5</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Pole</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Points</th>';
+    html += '<th style="padding: 12px; text-align: left; border: 1px solid var(--border-color);">Breakdown</th>';
+    html += '</tr></thead><tbody>';
+    
+    // PUBLIC: Loop through ALL players and ALL races for transparency
+    state.users.forEach(user => {
+        racesWithResults.forEach(race => {
+            const raceIdStr = String(race.id);
+            const raceData = state.races.find(r => String(r.id) === raceIdStr);
+            const raceStandings = state.standings[raceIdStr];
+            const userStanding = raceStandings && raceStandings[user.id];
             
-            <div style="margin-bottom: 20px;">
-                <h4 style="margin-bottom: 10px;">Your Picks:</h4>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
-                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>First place:</strong><br>
-                        ${grojeanDriver ? `${grojeanDriver.name} (${grojeanDriver.team})` : 'Not picked'}
-                    </div>
-                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>Last place:</strong><br>
-                        ${chiltonDriver ? `${chiltonDriver.name} (${chiltonDriver.team})` : 'Not picked'}
-                    </div>
-                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>Top 5:</strong><br>
-                        ${top5Drivers.length > 0 ? top5Drivers.map((d, i) => `${i + 1}. ${d.name}`).join('<br>') : 'Not picked'}
-                    </div>
-                    <div style="padding: 10px; background: var(--bg-tertiary); border-radius: 6px;">
-                        <strong>Pole:</strong><br>
-                        ${poleDriver ? `${poleDriver.name} (${poleDriver.team})` : 'Not picked'}
-                    </div>
-                </div>
-            </div>
+            // Get picks using reliable ID matching
+            const userIdStr = String(user.id);
+            const userIdNum = typeof user.id === 'string' ? parseInt(user.id, 10) : user.id;
             
-            <div style="padding: 15px; background: var(--bg-tertiary); border-radius: 6px; text-align: center;">
-                <strong style="font-size: 1.2rem;">Points Earned: ${points}</strong>
-                ${userStanding ? `
-                    <div style="margin-top: 10px; font-size: 0.9rem; color: var(--text-secondary);">
-                        First place: ${userStanding.grojean || 0} | 
-                        Last place: ${userStanding.chilton || 0} | 
-                        Pole Bonus: ${userStanding.poleBonus || 0} | 
-                        Top 5 Bonus: ${userStanding.top5Bonus || 0}
-                    </div>
-                ` : ''}
-            </div>
-        </div>`;
+            const grojeanPicks = generatePicksForRace('grojean', raceIdStr);
+            const myGrojeanPick = grojeanPicks.find(p => {
+                const pickUserIdStr = String(p.userId);
+                return pickUserIdStr === userIdStr || p.userId === user.id || (typeof userIdNum === 'number' && !isNaN(userIdNum) && p.userId === userIdNum);
+            });
+            const grojeanDriver = myGrojeanPick ? DRIVERS.find(d => d.id === myGrojeanPick.driverId) : null;
+            
+            const chiltonPicks = generatePicksForRace('chilton', raceIdStr);
+            const myChiltonPick = chiltonPicks.find(p => {
+                const pickUserIdStr = String(p.userId);
+                return pickUserIdStr === userIdStr || p.userId === user.id || (typeof userIdNum === 'number' && !isNaN(userIdNum) && p.userId === userIdNum);
+            });
+            const chiltonDriver = myChiltonPick ? DRIVERS.find(d => d.id === myChiltonPick.driverId) : null;
+            
+            const top5Picks = state.bonusPicks && state.bonusPicks.top5 && state.bonusPicks.top5[user.id] && state.bonusPicks.top5[user.id][raceIdStr] 
+                ? state.bonusPicks.top5[user.id][raceIdStr] 
+                : [];
+            const top5Drivers = top5Picks.map(driverId => DRIVERS.find(d => d.id === driverId)).filter(d => d);
+            
+            const polePick = state.bonusPicks && state.bonusPicks.pole && state.bonusPicks.pole[user.id] && state.bonusPicks.pole[user.id][raceIdStr]
+                ? state.bonusPicks.pole[user.id][raceIdStr]
+                : null;
+            const poleDriver = polePick ? DRIVERS.find(d => d.id === polePick) : null;
+            
+            const raceDate = new Date(race.date || race.deadlineDate).toLocaleDateString();
+            const points = userStanding ? userStanding.total : 0;
+            
+            html += `<tr data-user-id="${user.id}" data-race-id="${race.id}" style="border-bottom: 1px solid var(--border-color);">`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${user.avatar} ${user.username}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${race.name}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${raceDate}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${grojeanDriver ? grojeanDriver.name : 'Not picked'}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${chiltonDriver ? chiltonDriver.name : 'Not picked'}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${top5Drivers.length > 0 ? top5Drivers.map(d => d.name).join(', ') : 'Not picked'}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color);">${poleDriver ? poleDriver.name : 'Not picked'}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color); font-weight: bold;">${points}</td>`;
+            html += `<td style="padding: 10px; border: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-secondary);">`;
+            if (userStanding) {
+                html += `First: ${userStanding.grojean || 0} | Last: ${userStanding.chilton || 0} | Pole: ${userStanding.poleBonus || 0} | Top5: ${userStanding.top5Bonus || 0}`;
+            } else {
+                html += 'No points';
+            }
+            html += `</td></tr>`;
+        });
     });
     
-    html += '</div>';
+    html += '</tbody></table></div>';
     logsContent.innerHTML = html;
+    
+    // Add filter functionality with debouncing
+    const playerFilter = document.getElementById('logsPlayerFilter');
+    const raceFilter = document.getElementById('logsRaceFilter');
+    const exportBtn = document.getElementById('exportLogsCSVBtn');
+    const tableRows = document.querySelectorAll('#logsTableContainer tbody tr');
+    
+    function applyFilters() {
+        const selectedPlayer = playerFilter?.value || 'all';
+        const selectedRace = raceFilter?.value || 'all';
+        
+        tableRows.forEach(row => {
+            const userId = row.dataset.userId;
+            const raceId = row.dataset.raceId;
+            const showPlayer = selectedPlayer === 'all' || userId === selectedPlayer;
+            const showRace = selectedRace === 'all' || raceId === selectedRace;
+            row.style.display = (showPlayer && showRace) ? '' : 'none';
+        });
+    }
+    
+    // Debounce filter changes
+    let filterTimeout;
+    if (playerFilter) {
+        playerFilter.addEventListener('change', () => {
+            clearTimeout(filterTimeout);
+            filterTimeout = setTimeout(applyFilters, 300);
+        });
+    }
+    if (raceFilter) {
+        raceFilter.addEventListener('change', () => {
+            clearTimeout(filterTimeout);
+            filterTimeout = setTimeout(applyFilters, 300);
+        });
+    }
+    
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
+            try {
+                const visibleRows = Array.from(tableRows).filter(r => r.style.display !== 'none');
+                let csv = 'Player,Race,Date,First Place,Last Place,Top 5,Pole,Points,Breakdown\n';
+                visibleRows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    const rowData = Array.from(cells).map(cell => {
+                        let text = cell.textContent.trim();
+                        text = text.replace(/"/g, '""'); // Escape quotes
+                        return `"${text}"`;
+                    });
+                    csv += rowData.join(',') + '\n';
+                });
+                
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `f1-draft-logs-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                window.URL.revokeObjectURL(url);
+                showToast('Logs exported successfully!', 'success');
+            } catch (error) {
+                console.error('Error exporting logs:', error);
+                showToast('Error exporting logs. Please try again.', 'error');
+            }
+        });
+    }
+    
+    } catch (error) {
+        console.error('Error rendering logs:', error);
+        logsContent.innerHTML = '<p class="info-text" style="color: var(--error);">Error loading logs. Please refresh the page.</p>';
+    }
 }
 
 window.showRaceResults = showRaceResults;

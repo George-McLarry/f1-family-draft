@@ -40,12 +40,84 @@ body {
     color: var(--text-primary);
     line-height: 1.6;
     transition: background-color 0.3s, color 0.3s;
+    /* Prevent horizontal scroll on mobile */
+    overflow-x: hidden;
+    width: 100%;
+    max-width: 100vw;
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Mobile Responsiveness - Fix overflow and touch issues */
+@media screen and (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    header h1 {
+        font-size: 1.5rem;
+    }
+    
+    .tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+    
+    .tab-btn {
+        padding: 10px 12px;
+        font-size: 0.85rem;
+        white-space: nowrap;
+        min-width: fit-content;
+    }
+    
+    /* Prevent text overflow */
+    * {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+    
+    /* Fix table scrolling on mobile */
+    table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        width: 100%;
+    }
+    
+    /* Touch-friendly buttons */
+    button, .btn-primary, .btn-secondary {
+        min-height: 44px; /* iOS recommended touch target */
+        min-width: 44px;
+        padding: 12px 16px;
+    }
+    
+    /* Prevent zoom on input focus (iOS) */
+    input, select, textarea {
+        font-size: 16px;
+    }
+    
+    /* Fix modal on mobile */
+    .modal-content {
+        width: 95%;
+        max-width: 95%;
+        margin: 10px auto;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+}
+
+/* Tablet adjustments */
+@media screen and (min-width: 769px) and (max-width: 1024px) {
+    .container {
+        padding: 15px;
+    }
 }
 
 /* Header */
